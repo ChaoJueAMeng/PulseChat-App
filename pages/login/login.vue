@@ -42,7 +42,7 @@ async function submit() {
     store.setAuth(data)
     connectWs(data.accessToken)
     uni.vibrateShort && uni.vibrateShort()
-    if (data.isNewUser) {
+    if (data.newUser) {
       uni.showToast({ title: '账号 ' + data.user.account + ' 已生成', icon: 'none', duration: 2200 })
     }
     setTimeout(() => uni.switchTab({ url: '/pages/chats/chats' }), 400)
