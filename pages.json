@@ -1,0 +1,108 @@
+{
+  "pages": [
+    {
+      "path": "pages/splash/splash",
+      "style": {
+        "navigationStyle": "custom",
+        "app-plus": { "titleNView": false }
+      }
+    },
+    {
+      "path": "pages/login/login",
+      "style": {
+        "navigationStyle": "custom",
+        "app-plus": { "titleNView": false }
+      }
+    },
+    {
+      "path": "pages/chats/chats",
+      "style": {
+        "navigationBarTitleText": "脉冲",
+        "navigationBarBackgroundColor": "#071018",
+        "navigationBarTextStyle": "white"
+      }
+    },
+    {
+      "path": "pages/chat/chat",
+      "style": {
+        "navigationBarTitleText": "聊天",
+        "navigationBarBackgroundColor": "#071018",
+        "navigationBarTextStyle": "white"
+      }
+    },
+    {
+      "path": "pages/contacts/contacts",
+      "style": {
+        "navigationBarTitleText": "通讯录",
+        "navigationBarBackgroundColor": "#071018",
+        "navigationBarTextStyle": "white"
+      }
+    },
+    {
+      "path": "pages/mine/mine",
+      "style": {
+        "navigationBarTitleText": "我的",
+        "navigationBarBackgroundColor": "#071018",
+        "navigationBarTextStyle": "white"
+      }
+    },
+    {
+      "path": "pages/search/search",
+      "style": {
+        "navigationBarTitleText": "搜索",
+        "navigationBarBackgroundColor": "#071018",
+        "navigationBarTextStyle": "white"
+      }
+    },
+    {
+      "path": "pages/group-create/group-create",
+      "style": {
+        "navigationBarTitleText": "创建群聊",
+        "navigationBarBackgroundColor": "#071018",
+        "navigationBarTextStyle": "white"
+      }
+    },
+    {
+      "path": "pages/profile-edit/profile-edit",
+      "style": {
+        "navigationBarTitleText": "编辑资料",
+        "navigationBarBackgroundColor": "#071018",
+        "navigationBarTextStyle": "white"
+      }
+    }
+  ],
+  "globalStyle": {
+    "navigationBarTextStyle": "white",
+    "navigationBarTitleText": "PulseChat",
+    "navigationBarBackgroundColor": "#071018",
+    "backgroundColor": "#071018",
+    "backgroundColorTop": "#071018",
+    "backgroundColorBottom": "#071018"
+  },
+  "tabBar": {
+    "color": "#7a8a9a",
+    "selectedColor": "#2EE6A6",
+    "backgroundColor": "#0A1520",
+    "borderStyle": "black",
+    "list": [
+      {
+        "pagePath": "pages/chats/chats",
+        "text": "聊天",
+        "iconPath": "static/tab/chat.png",
+        "selectedIconPath": "static/tab/chat-active.png"
+      },
+      {
+        "pagePath": "pages/contacts/contacts",
+        "text": "通讯录",
+        "iconPath": "static/tab/contact.png",
+        "selectedIconPath": "static/tab/contact-active.png"
+      },
+      {
+        "pagePath": "pages/mine/mine",
+        "text": "我的",
+        "iconPath": "static/tab/mine.png",
+        "selectedIconPath": "static/tab/mine-active.png"
+      }
+    ]
+  }
+}

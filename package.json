@@ -1,0 +1,12 @@
+{
+  "name": "pulsechat",
+  "version": "1.0.0",
+  "description": "PulseChat realtime neon chat app",
+  "main": "main.js",
+  "scripts": {
+    "dev:h5": "echo Use HBuilderX to run"
+  },
+  "dependencies": {
+    "vue": "^3.4.21"
+  }
+}

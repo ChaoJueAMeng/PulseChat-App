@@ -1,0 +1,48 @@
+$pc-bg: #071018;
+$pc-bg-2: #0B1A26;
+$pc-text: #E8F4FF;
+$pc-muted: #7F93A8;
+$pc-mint: #2EE6A6;
+$pc-cyan: #29D0FF;
+$pc-coral: #FF6B4A;
+$pc-amber: #FFC857;
+
+@keyframes pc-pulse {
+  0% { transform: scale(0.92); opacity: 0.55; }
+  50% { transform: scale(1.08); opacity: 1; }
+  100% { transform: scale(0.92); opacity: 0.55; }
+}
+
+@keyframes pc-float {
+  0% { transform: translateY(0); }
+  50% { transform: translateY(-12rpx); }
+  100% { transform: translateY(0); }
+}
+
+@keyframes pc-shine {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+@keyframes pc-bubble-in {
+  from { opacity: 0; transform: translateY(18rpx) scale(0.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.pc-aurora {
+  background:
+    radial-gradient(circle at 20% 10%, rgba(46, 230, 166, 0.28), transparent 36%),
+    radial-gradient(circle at 85% 18%, rgba(41, 208, 255, 0.22), transparent 32%),
+    radial-gradient(circle at 50% 90%, rgba(255, 107, 74, 0.18), transparent 40%),
+    linear-gradient(160deg, #071018, #0B1A26 55%, #08141F);
+}
+
+.pc-glow-dot {
+  width: 16rpx;
+  height: 16rpx;
+  border-radius: 50%;
+  background: $pc-mint;
+  box-shadow: 0 0 16rpx $pc-mint;
+  animation: pc-pulse 1.6s ease-in-out infinite;
+}
