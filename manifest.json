@@ -1,39 +1,104 @@
 {
-  "name": "PulseChat",
-  "appid": "__UNI__PULSECHAT",
-  "description": "霓虹脉冲实时聊天",
-  "versionName": "1.0.0",
-  "versionCode": "100",
-  "transformPx": false,
-  "app-plus": {
-    "usingComponents": true,
-    "nvueStyleCompiler": "uni-app",
-    "splashscreen": {
-      "alwaysShowBeforeRender": true,
-      "waiting": true,
-      "autoclose": true,
-      "delay": 0
+    "name" : "脉冲",
+    "appid" : "__UNI__BC66A18",
+    "description" : "霓虹脉冲实时聊天",
+    "versionName" : "1.0.1.002",
+    "versionCode" : 1000002,
+    "transformPx" : false,
+    "app-plus" : {
+        "usingComponents" : true,
+        "nvueStyleCompiler" : "uni-app",
+        "splashscreen" : {
+            "alwaysShowBeforeRender" : false,
+            "waiting" : false,
+            "autoclose" : true,
+            "delay" : 0
+        },
+        "modules" : {
+            "Push" : {},
+            "Camera" : {}
+        },
+        "distribute" : {
+            "android" : {
+                "usesCleartextTraffic" : true,
+                "permissions" : [
+                    "<uses-permission android:name=\"android.permission.INTERNET\"/>",
+                    "<uses-permission android:name=\"android.permission.ACCESS_NETWORK_STATE\"/>",
+                    "<uses-permission android:name=\"android.permission.VIBRATE\"/>",
+                    "<uses-permission android:name=\"android.permission.RECORD_AUDIO\"/>",
+                    "<uses-permission android:name=\"android.permission.CAMERA\"/>",
+                    "<uses-permission android:name=\"android.permission.ACCESS_WIFI_STATE\"/>",
+                    "<uses-permission android:name=\"android.permission.WRITE_EXTERNAL_STORAGE\"/>",
+                    "<uses-permission android:name=\"android.permission.READ_EXTERNAL_STORAGE\"/>",
+                    "<uses-permission android:name=\"android.permission.READ_MEDIA_IMAGES\"/>"
+                ]
+            },
+            "ios" : {
+                "privacyDescription" : {
+                    "NSMicrophoneUsageDescription" : "用于录制并发送语音消息",
+                    "NSCameraUsageDescription" : "用于拍摄并发送图片",
+                    "NSPhotoLibraryUsageDescription" : "用于选择与保存聊天图片",
+                    "NSPhotoLibraryAddUsageDescription" : "用于将图片保存到相册"
+                },
+                "dSYMs" : false
+            },
+            "sdkConfigs" : {},
+            "icons" : {
+                "android" : {
+                    "hdpi" : "unpackage/res/icons/72x72.png",
+                    "xhdpi" : "unpackage/res/icons/96x96.png",
+                    "xxhdpi" : "unpackage/res/icons/144x144.png",
+                    "xxxhdpi" : "unpackage/res/icons/192x192.png"
+                },
+                "ios" : {
+                    "appstore" : "unpackage/res/icons/1024x1024.png",
+                    "ipad" : {
+                        "app" : "unpackage/res/icons/76x76.png",
+                        "app@2x" : "unpackage/res/icons/152x152.png",
+                        "notification" : "unpackage/res/icons/20x20.png",
+                        "notification@2x" : "unpackage/res/icons/40x40.png",
+                        "proapp@2x" : "unpackage/res/icons/167x167.png",
+                        "settings" : "unpackage/res/icons/29x29.png",
+                        "settings@2x" : "unpackage/res/icons/58x58.png",
+                        "spotlight" : "unpackage/res/icons/40x40.png",
+                        "spotlight@2x" : "unpackage/res/icons/80x80.png"
+                    },
+                    "iphone" : {
+                        "app@2x" : "unpackage/res/icons/120x120.png",
+                        "app@3x" : "unpackage/res/icons/180x180.png",
+                        "notification@2x" : "unpackage/res/icons/40x40.png",
+                        "notification@3x" : "unpackage/res/icons/60x60.png",
+                        "settings@2x" : "unpackage/res/icons/58x58.png",
+                        "settings@3x" : "unpackage/res/icons/87x87.png",
+                        "spotlight@2x" : "unpackage/res/icons/80x80.png",
+                        "spotlight@3x" : "unpackage/res/icons/120x120.png"
+                    }
+                }
+            },
+            "splashscreen" : {
+                "androidStyle" : "default",
+                "useOriginalMsgbox" : false,
+                "android" : {
+                    "xxhdpi" : "C:/Users/caiji/Desktop/1080_.png",
+                    "xhdpi" : "C:/Users/caiji/Desktop/720_.png",
+                    "hdpi" : "C:/Users/caiji/Desktop/480_.png"
+                }
+            }
+        }
     },
-    "modules": {},
-    "distribute": {
-      "android": {
-        "permissions": [
-          "<uses-permission android:name=\"android.permission.INTERNET\"/>",
-          "<uses-permission android:name=\"android.permission.ACCESS_NETWORK_STATE\"/>",
-          "<uses-permission android:name=\"android.permission.VIBRATE\"/>"
-        ]
-      },
-      "ios": {},
-      "sdkConfigs": {}
-    }
-  },
-  "quickapp": {},
-  "mp-weixin": {
-    "appid": "",
-    "setting": {
-      "urlCheck": false
+    "quickapp" : {},
+    "mp-weixin" : {
+        "appid" : "",
+        "setting" : {
+            "urlCheck" : false
+        },
+        "usingComponents" : true,
+        "permission" : {
+            "scope.record" : {
+                "desc" : "用于录制并发送语音消息"
+            }
+        }
     },
-    "usingComponents": true
-  },
-  "vueVersion": "3"
+    "vueVersion" : "3",
+    "locale" : "auto"
 }
