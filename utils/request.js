@@ -98,7 +98,7 @@ export const api = {
   }),
   sendMessage: (data) => request({ url: '/api/messages', method: 'POST', data }),
   recallMessage: (id) => request({ url: '/api/messages/' + id + '/recall', method: 'POST' }),
-  /** 消息附表情：{ emoji }，再点同一表情为取消；silent 便于后端未上线时降级 */
+  /** 消息附表情：{ emoji, active }，再点同一表情为取消 */
   reactMessage: (id, data) => request({
     url: '/api/messages/' + id + '/react',
     method: 'POST',

@@ -17,7 +17,7 @@
 
     <view class="body">
       <view class="toolbar pc-card">
-        <text class="tip">{{ list.length }}/{{ max }} · 长按拖动排序</text>
+        <text class="tip">{{ list.length }}/{{ max }} · 长按可置顶或删除</text>
         <view class="toolbar-actions">
           <text class="btn pc-press" @tap="batchAdd">批量添加</text>
           <text
@@ -34,26 +34,14 @@
         <text class="empty-sub">点击「批量添加」从相册选择图片</text>
       </view>
 
-      <view
-        v-else
-        class="grid"
-        @touchmove="onTouchMove"
-        @touchend="onTouchEnd"
-        @touchcancel="onTouchEnd"
-      >
+      <view v-else class="grid">
         <view
           v-for="(s, index) in list"
           :key="s.id"
           class="cell"
-          :class="{
-            selected: selected.has(s.id),
-            dragging: dragIndex === index,
-            dim: dragIndex >= 0 && dragIndex !== index
-          }"
-          :style="cellStyle(index)"
-          @tap="onTap(s, index)"
-          @longpress="onLongPress(index, $event)"
-          @touchstart="onTouchStart(index, $event)"
+          :class="{ selected: selected.has(s.id) }"
+          @tap="onTap(s)"
+          @longpress="onLongPress(s, index)"
         >
           <image class="img" :src="mediaUrl(s.url)" mode="aspectFit" lazy-load />
           <view v-if="editing" class="check" :class="{ on: selected.has(s.id) }">
@@ -82,13 +70,6 @@ const max = MAX_USER_STICKERS
 const statusBarHeight = uni.getSystemInfoSync().statusBarHeight || 20
 const headerStyle = computed(() => ({ paddingTop: statusBarHeight + 'px' }))
 
-const dragIndex = ref(-1)
-const overIndex = ref(-1)
-let startY = 0
-let cellH = 0
-let dragging = false
-let orderDirty = false
-
 function mediaUrl(url) {
   return fullUrl(url)
 }
@@ -105,8 +86,6 @@ function goBack() {
 function toggleEdit() {
   editing.value = !editing.value
   selected.value = new Set()
-  dragIndex.value = -1
-  overIndex.value = -1
 }
 
 async function load() {
@@ -121,8 +100,7 @@ async function load() {
   }
 }
 
-function onTap(s, index) {
-  if (dragging) return
+function onTap(s) {
   if (!editing.value) return
   const next = new Set(selected.value)
   if (next.has(s.id)) next.delete(s.id)
@@ -130,75 +108,53 @@ function onTap(s, index) {
   selected.value = next
 }
 
-function onLongPress(index, e) {
+function onLongPress(s, index) {
   if (editing.value) return
-  dragging = true
-  dragIndex.value = index
-  overIndex.value = index
-  orderDirty = false
-  const t = e.touches?.[0] || e.changedTouches?.[0]
-  startY = t?.clientY || t?.pageY || 0
-  // 估算单元格高度（含间距）
-  try {
-    const sys = uni.getSystemInfoSync()
-    cellH = Math.max(72, (sys.windowWidth || 375) * 0.25)
-  } catch (err) {
-    cellH = 90
-  }
   try { uni.vibrateShort && uni.vibrateShort({ type: 'light' }) } catch (err) {}
+  uni.showActionSheet({
+    itemList: ['放至最前', '删除'],
+    success: (res) => {
+      if (res.tapIndex === 0) moveToFront(index)
+      else if (res.tapIndex === 1) removeOne(s)
+    }
+  })
 }
 
-function onTouchStart(index, e) {
-  if (dragIndex.value < 0) return
-  const t = e.touches?.[0]
-  if (t) startY = t.clientY || t.pageY || startY
-}
-
-function onTouchMove(e) {
-  if (dragIndex.value < 0 || !dragging) return
-  const t = e.touches?.[0]
-  if (!t) return
-  const y = t.clientY || t.pageY || 0
-  const delta = y - startY
-  const steps = Math.round(delta / cellH)
-  let target = dragIndex.value + steps
-  target = Math.max(0, Math.min(list.value.length - 1, target))
-  if (target === overIndex.value) return
-  overIndex.value = target
-  if (target !== dragIndex.value) {
-    const arr = list.value.slice()
-    const [item] = arr.splice(dragIndex.value, 1)
-    arr.splice(target, 0, item)
-    list.value = arr
-    dragIndex.value = target
-    startY = y
-    orderDirty = true
+async function moveToFront(index) {
+  if (index <= 0) {
+    uni.showToast({ title: '已在最前', icon: 'none' })
+    return
   }
-}
-
-async function onTouchEnd() {
-  if (dragIndex.value < 0) return
-  const dirty = orderDirty
-  dragIndex.value = -1
-  overIndex.value = -1
-  dragging = false
-  orderDirty = false
-  if (!dirty) return
+  const arr = list.value.slice()
+  const [item] = arr.splice(index, 1)
+  arr.unshift(item)
   try {
-    const ids = list.value.map(s => s.id)
-    list.value = (await api.reorderStickers(ids)) || list.value
+    const ids = arr.map(s => s.id)
+    list.value = (await api.reorderStickers(ids)) || arr
+    uni.showToast({ title: '已放至最前', icon: 'none' })
   } catch (e) {
-    uni.showToast({ title: e?.message || '排序失败', icon: 'none' })
+    uni.showToast({ title: e?.message || '操作失败', icon: 'none' })
     await load()
   }
 }
 
-function cellStyle(index) {
-  if (dragIndex.value !== index) return {}
-  return {
-    zIndex: 5,
-    transform: 'scale(1.06)'
-  }
+function removeOne(s) {
+  if (!s?.id) return
+  uni.showModal({
+    title: '删除表情包',
+    content: '确定删除该表情包？',
+    confirmColor: '#F43F5E',
+    success: async (res) => {
+      if (!res.confirm) return
+      try {
+        await api.deleteSticker(s.id)
+        list.value = list.value.filter(x => x.id !== s.id)
+        uni.showToast({ title: '已删除', icon: 'none' })
+      } catch (e) {
+        uni.showToast({ title: e?.message || '删除失败', icon: 'none' })
+      }
+    }
+  })
 }
 
 async function batchAdd() {
@@ -223,7 +179,7 @@ async function batchAdd() {
         }
         if (!items.length) throw new Error('上传失败')
         const created = await api.batchAddStickers(items)
-        list.value = [...list.value, ...(created || [])]
+        list.value = [...(created || []), ...list.value]
         uni.showToast({ title: '已添加 ' + items.length + ' 个', icon: 'none' })
       } catch (e) {
         uni.showToast({ title: e?.message || '添加失败', icon: 'none' })
@@ -319,11 +275,6 @@ onShow(load)
   padding: 8rpx;
   box-sizing: border-box;
   position: relative;
-  transition: transform 0.12s ease, opacity 0.12s ease;
-  &.dim { opacity: 0.55; }
-  &.dragging {
-    opacity: 1;
-  }
   &.selected .img {
     box-shadow: 0 0 0 3rpx rgba(167, 139, 250, 0.7);
   }

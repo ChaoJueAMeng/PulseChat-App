@@ -1,5 +1,5 @@
 <template>
-  <view v-if="show" class="sticker-panel pc-card">
+  <view v-if="show" class="sticker-panel pc-card" @tap.stop>
     <view class="head">
       <text class="title">表情包</text>
       <text class="count">{{ list.length }}/{{ max }}</text>
@@ -8,11 +8,12 @@
     </view>
     <scroll-view scroll-y class="grid-wrap">
       <view v-if="loading" class="empty">加载中…</view>
-      <view v-else-if="!list.length" class="empty">
-        <text class="empty-title">还没有表情包</text>
-        <text class="empty-sub pc-press" @tap="emit('manage')">去添加</text>
-      </view>
       <view v-else class="grid">
+        <view class="cell add-cell pc-press" @tap="addStickers">
+          <view class="add-box">
+            <text class="add-ico">+</text>
+          </view>
+        </view>
         <view
           v-for="s in list"
           :key="s.id"
@@ -60,6 +61,41 @@ async function load() {
 function pick(s) {
   if (!s?.url) return
   emit('pick', s)
+}
+
+/** 复用管理页同款：选图 → 上传 → batchAdd（后端默认插到最前） */
+function addStickers() {
+  const remain = max - list.value.length
+  if (remain <= 0) {
+    uni.showToast({ title: '已达上限 100 个', icon: 'none' })
+    return
+  }
+  uni.chooseImage({
+    count: Math.min(9, remain),
+    sizeType: ['compressed'],
+    success: async (res) => {
+      const paths = res.tempFilePaths || []
+      if (!paths.length) return
+      uni.showLoading({ title: '上传中', mask: true })
+      try {
+        const items = []
+        for (const p of paths) {
+          if (list.value.length + items.length >= max) break
+          const up = await api.upload(p, { category: 'sticker' })
+          if (up?.url) items.push({ url: up.url })
+        }
+        if (!items.length) throw new Error('上传失败')
+        const created = await api.batchAddStickers(items)
+        list.value = [...(created || []), ...list.value]
+        uni.showToast({ title: '已添加 ' + items.length + ' 个', icon: 'none' })
+      } catch (e) {
+        uni.showToast({ title: e?.message || '添加失败', icon: 'none' })
+        await load()
+      } finally {
+        uni.hideLoading()
+      }
+    }
+  })
 }
 
 watch(() => props.show, (v) => {
@@ -123,17 +159,26 @@ defineExpose({ reload: load })
   border-radius: 12rpx;
   background: rgba(167, 139, 250, 0.08);
 }
+.add-box {
+  width: 100%;
+  height: 140rpx;
+  border-radius: 12rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(167, 139, 250, 0.1);
+  border: 2rpx dashed rgba(167, 139, 250, 0.45);
+  box-sizing: border-box;
+}
+.add-ico {
+  font-size: 64rpx;
+  line-height: 1;
+  color: $pc-purple;
+}
 .empty {
   padding: 48rpx 20rpx;
   text-align: center;
   color: $pc-muted;
   font-size: 24rpx;
-}
-.empty-title {
-  display: block;
-  margin-bottom: 12rpx;
-}
-.empty-sub {
-  color: $pc-purple;
 }
 </style>

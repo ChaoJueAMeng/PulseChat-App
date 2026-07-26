@@ -125,7 +125,13 @@
       </view>
     </scroll-view>
 
-    <view v-if="showAt" class="at-panel pc-card">
+    <view
+      v-if="auxInputOpen"
+      class="aux-dismiss-mask"
+      @tap="dismissAuxInput"
+    />
+
+    <view v-if="showAt" class="at-panel pc-card" @tap.stop>
       <view class="at-item" v-for="mem in members" :key="mem.userId" @tap="pickAt(mem)">
         @{{ memberDisplayName(mem) || mem.nickname }}{{ mem.memberType === 2 ? ' · AI' : '' }}
       </view>
@@ -168,7 +174,7 @@
       </view>
     </view>
 
-    <view v-if="showComposer" class="composer-wrap" :style="composerWrapStyle">
+    <view v-if="showComposer" class="composer-wrap" :style="composerWrapStyle" @tap.stop>
       <view class="composer pc-card">
         <view v-if="replyTarget" class="reply-bar">
           <view class="reply-bar__body">
@@ -348,6 +354,8 @@ const connected = computed(() => store.state.connected)
 const streamingMap = ref({})
 const sendPulse = ref(false)
 const voiceMode = ref(false)
+/** 表情 / 表情包 / @ / 语音模式任一开启时，可点空白处收起 */
+const auxInputOpen = computed(() => showEmoji.value || showSticker.value || showAt.value || voiceMode.value)
 const recording = ref(false)
 const recordCancel = ref(false)
 const playingId = ref(null)
@@ -1086,6 +1094,15 @@ function closeAuxPanels() {
   closeMsgMenu()
 }
 
+/** 点击输入区外空白：关闭表情/表情包/@，并退出语音模式回到普通输入 */
+function dismissAuxInput() {
+  if (recording.value) return
+  closeEmojiPanel()
+  closeStickerPanel()
+  showAt.value = false
+  voiceMode.value = false
+}
+
 function toggleVoiceMode() {
   voiceMode.value = !voiceMode.value
   if (voiceMode.value) closeAuxPanels()
@@ -1508,12 +1525,14 @@ function applyRemoteReaction(payload) {
   }
   const idx = messages.value.findIndex(x => Number(x.id) === Number(msgId))
   if (idx < 0) return
-  const emoji = payload.emoji
-  const userId = payload.userId ?? payload.reactorId
-  if (!emoji) {
-    if (payload.extraJson) patchMsgExtra(msgId, payload.extraJson)
+  // 优先用服务端合并后的完整 extraJson，避免并发回应时丢状态
+  if (payload.extraJson) {
+    patchMsgExtra(msgId, payload.extraJson)
     return
   }
+  const emoji = payload.emoji
+  const userId = payload.userId ?? payload.reactorId
+  if (!emoji) return
   const active = payload.active !== false && payload.removed !== true
   const next = setReaction(messages.value[idx], emoji, userId, active)
   patchMsgExtra(msgId, next)
@@ -1537,7 +1556,7 @@ async function applyReaction(m, emoji) {
     sendStomp('/app/chat.react', body)
   } catch (e) {}
 
-  // REST 持久化（后端未实现时 silent 失败，本地+WS 仍可用）
+  // REST 持久化；WS 已广播时仍以服务端结果校准本地
   try {
     const res = await api.reactMessage(m.id, { emoji, active: toggled.active })
     if (res) {
@@ -1975,6 +1994,15 @@ page {
   background: transparent;
   border-color: transparent;
 }
+.aux-dismiss-mask {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  z-index: 25;
+  background: transparent;
+}
 .at-panel {
   position: fixed;
   left: 20rpx;
@@ -1991,7 +2019,7 @@ page {
   left: 0;
   right: 0;
   bottom: 0;
-  z-index: 20;
+  z-index: 28;
   width: 100%;
   max-width: 100%;
   box-sizing: border-box;

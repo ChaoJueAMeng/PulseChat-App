@@ -1,5 +1,5 @@
 <template>
-  <view v-if="show" class="emoji-panel pc-card">
+  <view v-if="show" class="emoji-panel pc-card" @tap.stop>
     <view class="tabs">
       <text
         v-for="cat in categories"

@@ -14,10 +14,7 @@
             "autoclose" : true,
             "delay" : 0
         },
-        "modules" : {
-            "Push" : {},
-            "Camera" : {}
-        },
+        "modules" : {},
         "distribute" : {
             "android" : {
                 "usesCleartextTraffic" : true,
@@ -26,7 +23,6 @@
                     "<uses-permission android:name=\"android.permission.ACCESS_NETWORK_STATE\"/>",
                     "<uses-permission android:name=\"android.permission.VIBRATE\"/>",
                     "<uses-permission android:name=\"android.permission.RECORD_AUDIO\"/>",
-                    "<uses-permission android:name=\"android.permission.CAMERA\"/>",
                     "<uses-permission android:name=\"android.permission.ACCESS_WIFI_STATE\"/>",
                     "<uses-permission android:name=\"android.permission.WRITE_EXTERNAL_STORAGE\"/>",
                     "<uses-permission android:name=\"android.permission.READ_EXTERNAL_STORAGE\"/>",
@@ -36,7 +32,6 @@
             "ios" : {
                 "privacyDescription" : {
                     "NSMicrophoneUsageDescription" : "用于录制并发送语音消息",
-                    "NSCameraUsageDescription" : "用于拍摄并发送图片",
                     "NSPhotoLibraryUsageDescription" : "用于选择与保存聊天图片",
                     "NSPhotoLibraryAddUsageDescription" : "用于将图片保存到相册"
                 },

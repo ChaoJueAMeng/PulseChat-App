@@ -2,6 +2,13 @@ import { getStore } from '../store/index.js'
 import { sortConversations } from './chat-settings.js'
 import { api } from './request.js'
 
+/**
+ * UniPush/个推在模拟器（尤其 MuMu）上会疯狂重试并拖垮进程。
+ * 先关掉所有 plus.push / getPushClientId 调用；本地 Android 通知仍可用。
+ * 真机要测离线推送时再改为 true，并配好 UniPush。
+ */
+const UNIPUSH_ENABLED = false
+
 const ENABLED_KEY = 'pc_notify_enabled'
 const CID_KEY = 'pc_push_client_id'
 const CHANNEL_ID = 'pulse_chat_messages'
@@ -197,6 +204,7 @@ function createAndroidNativeNotification(title, content, payload, notifyId) {
 }
 
 function createPlusPushMessage(title, content, payload) {
+  if (!UNIPUSH_ENABLED) return false
   if (typeof plus === 'undefined' || !plus.push || typeof plus.push.createMessage !== 'function') {
     return false
   }
@@ -247,6 +255,7 @@ function consumePendingNotifyPayload() {
 }
 
 function installPushHandlers() {
+  if (!UNIPUSH_ENABLED) return
   if (pushHandlersInstalled) return
   if (typeof plus === 'undefined' || !plus.push) return
   pushHandlersInstalled = true
@@ -300,6 +309,7 @@ function requestNotifyPermission() {
     }
   } catch (e) {}
   // iOS：触发系统通知授权弹窗（同时可拿到 CID）
+  if (!UNIPUSH_ENABLED) return
   try {
     resolvePushClientId().catch(() => {})
   } catch (e) {}
@@ -336,6 +346,7 @@ function readCachedClientId() {
 
 /** 获取 UniPush / 个推 CID */
 export function resolvePushClientId() {
+  if (!UNIPUSH_ENABLED) return Promise.resolve('')
   return new Promise((resolve) => {
     const finish = (cid) => {
       const id = cid ? String(cid).trim() : ''
@@ -378,6 +389,7 @@ function tryPlusClientId(finish) {
 
 /** 登录后 / App 启动：上报 CID 供离线推送 */
 export async function registerPushClient() {
+  if (!UNIPUSH_ENABLED) return ''
   const prefs = getNotifyPrefs()
   if (!prefs.enabled) return ''
   const store = getStore()
@@ -401,6 +413,7 @@ export async function registerPushClient() {
 
 /** 延迟重试：自定义基座上 CID 有时稍后才就绪 */
 export function scheduleRegisterPushClient(delayMs = 800) {
+  if (!UNIPUSH_ENABLED) return
   if (registerPushTimer) {
     clearTimeout(registerPushTimer)
     registerPushTimer = null
