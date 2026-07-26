@@ -1,14 +1,18 @@
 <template>
-  <view class="login pc-aurora">
+  <view class="register pc-aurora">
     <view class="hero pc-enter">
       <text class="logo">PulseChat</text>
-      <text class="desc">登录你的脉冲账号</text>
+      <text class="desc">创建你的脉冲账号</text>
     </view>
 
     <view class="panel pc-card pc-enter" style="animation-delay: 0.1s">
       <view class="field">
         <text class="label">手机号</text>
         <input class="input" type="number" maxlength="11" v-model="phone" placeholder="请输入11位手机号" placeholder-class="ph" />
+      </view>
+      <view class="field">
+        <text class="label">昵称（可选）</text>
+        <input class="input" v-model="nickname" placeholder="给你一个闪亮的名字" placeholder-class="ph" />
       </view>
       <view class="field">
         <text class="label">密码</text>
@@ -24,10 +28,24 @@
           <text class="eye" @tap="showPassword = !showPassword">{{ showPassword ? '隐藏' : '显示' }}</text>
         </view>
       </view>
-      <button class="pc-btn enter" :loading="loading" @tap="submit">登录</button>
+      <view class="field">
+        <text class="label">确认密码</text>
+        <view class="input-row">
+          <input
+            class="input flex"
+            :password="!showConfirm"
+            maxlength="32"
+            v-model="confirmPassword"
+            placeholder="再次输入密码"
+            placeholder-class="ph"
+          />
+          <text class="eye" @tap="showConfirm = !showConfirm">{{ showConfirm ? '隐藏' : '显示' }}</text>
+        </view>
+      </view>
+      <button class="pc-btn enter" :loading="loading" @tap="submit">注册</button>
       <view class="switch-row">
-        <text class="switch-text">还没有账号？</text>
-        <text class="switch-link" @tap="goRegister">去注册</text>
+        <text class="switch-text">已有账号？</text>
+        <text class="switch-link" @tap="goLogin">去登录</text>
       </view>
     </view>
   </view>
@@ -42,12 +60,17 @@ import { connectWs } from '../../utils/ws.js'
 import { scheduleRegisterPushClient } from '../../utils/notify.js'
 
 const phone = ref('')
+const nickname = ref('')
 const password = ref('')
+const confirmPassword = ref('')
 const showPassword = ref(false)
+const showConfirm = ref(false)
 const loading = ref(false)
 
-function goRegister() {
-  uni.navigateTo({ url: '/pages/register/register' })
+function goLogin() {
+  uni.navigateBack({
+    fail: () => uni.reLaunch({ url: '/pages/login/login' })
+  })
 }
 
 async function submit() {
@@ -63,10 +86,15 @@ async function submit() {
     uni.showToast({ title: '密码长度为6-32位', icon: 'none' })
     return
   }
+  if (password.value !== confirmPassword.value) {
+    uni.showToast({ title: '两次密码不一致', icon: 'none' })
+    return
+  }
   loading.value = true
   try {
-    const data = await api.login({
+    const data = await api.register({
       phone: phone.value,
+      nickname: nickname.value || undefined,
       password: password.value
     })
     const store = getStore()
@@ -77,7 +105,7 @@ async function submit() {
       store.setConversations(await api.conversations() || [])
     } catch (e) {}
     uni.vibrateShort && uni.vibrateShort()
-    uni.showToast({ title: '登录成功', icon: 'none' })
+    uni.showToast({ title: '账号 ' + data.user.account + ' 已生成', icon: 'none', duration: 2200 })
     setTimeout(() => uni.switchTab({ url: '/pages/chats/chats' }), 400)
   } catch (e) {
   } finally {
@@ -87,7 +115,7 @@ async function submit() {
 </script>
 
 <style scoped lang="scss">
-.login { min-height: 100vh; padding: 140rpx 44rpx 60rpx; }
+.register { min-height: 100vh; padding: 140rpx 44rpx 60rpx; }
 .hero { margin-bottom: 72rpx; }
 .logo {
   font-size: 68rpx; font-weight: 800; letter-spacing: 2rpx;
