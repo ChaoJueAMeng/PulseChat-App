@@ -1,11 +1,124 @@
-$pc-bg: #071018;
-$pc-bg-2: #0B1A26;
-$pc-text: #E8F4FF;
-$pc-muted: #7F93A8;
-$pc-mint: #2EE6A6;
-$pc-cyan: #29D0FF;
-$pc-coral: #FF6B4A;
-$pc-amber: #FFC857;
+// PulseChat — 紫红氛围主题（全局样式与动效）
+$pc-bg: #0A0614;
+$pc-bg-2: #140A22;
+$pc-bg-3: #1C1030;
+$pc-text: #F5EDFF;
+$pc-muted: #9B8AAF;
+$pc-purple: #A78BFA;
+$pc-purple-deep: #7C3AED;
+$pc-magenta: #E879F9;
+$pc-rose: #FB7185;
+$pc-red: #F43F5E;
+
+:root,
+page {
+  --pc-bg: #{$pc-bg};
+  --pc-bg-2: #{$pc-bg-2};
+  --pc-bg-3: #{$pc-bg-3};
+  --pc-text: #{$pc-text};
+  --pc-muted: #{$pc-muted};
+  --pc-purple: #{$pc-purple};
+  --pc-purple-deep: #{$pc-purple-deep};
+  --pc-magenta: #{$pc-magenta};
+  --pc-rose: #{$pc-rose};
+  --pc-red: #{$pc-red};
+  --pc-radius-sm: #{$pc-radius-sm};
+  --pc-radius-md: #{$pc-radius-md};
+  --pc-radius-lg: #{$pc-radius-lg};
+  --pc-radius-xl: #{$pc-radius-xl};
+  --pc-shadow: 0 16rpx 48rpx rgba(88, 28, 135, 0.28);
+  --pc-glow-purple: 0 0 32rpx rgba(167, 139, 250, 0.28);
+  --pc-glow-rose: 0 0 28rpx rgba(244, 63, 94, 0.22);
+  --pc-nav-bg: rgba(36, 18, 63, 0.96);
+  --pc-nav-border: rgba(232, 121, 249, 0.16);
+}
+
+/* 统一顶栏：紫红渐变（去掉 blur，降低 GPU 合成开销） */
+.pc-nav-bar {
+  background: linear-gradient(105deg, #24123F 0%, #4A1D6B 42%, #7A1F4C 78%, #8B153C 100%);
+  border-bottom: 1px solid var(--pc-nav-border);
+  box-shadow: 0 6rpx 20rpx rgba(124, 58, 237, 0.18);
+}
+
+.pc-nav-title-wrap {
+  height: 88rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 28rpx;
+  box-sizing: border-box;
+}
+
+.pc-nav-title {
+  font-size: 34rpx;
+  font-weight: 700;
+  color: $pc-text;
+  letter-spacing: 1rpx;
+  text-shadow: 0 0 18rpx rgba(167, 139, 250, 0.28);
+}
+
+.pc-nav-row {
+  height: 88rpx;
+  display: flex;
+  align-items: center;
+  padding: 0 12rpx 0 8rpx;
+  box-sizing: border-box;
+}
+
+.pc-nav-back {
+  width: 72rpx;
+  height: 72rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border-radius: $pc-radius-md;
+  color: $pc-text;
+}
+
+.pc-nav-back-icon {
+  font-size: 52rpx;
+  font-weight: 300;
+  line-height: 1;
+  margin-top: -4rpx;
+  color: $pc-purple;
+  text-shadow: 0 0 12rpx rgba(167, 139, 250, 0.35);
+}
+
+.pc-nav-row .pc-nav-title {
+  flex: 1;
+  text-align: center;
+  padding-right: 72rpx; /* 与返回键对称居中 */
+}
+
+.pc-nav-row.has-side .pc-nav-title {
+  padding-right: 0;
+}
+
+.pc-nav-side {
+  width: 72rpx;
+  height: 72rpx;
+  flex-shrink: 0;
+}
+
+.pc-page-header {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  flex-shrink: 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* 内嵌 scroll-view 的页面用 flex 顶栏，勿与 sticky 叠加 */
+.pc-page-header--static {
+  position: relative;
+  top: auto;
+  z-index: 50;
+  flex-shrink: 0;
+  width: 100%;
+  box-sizing: border-box;
+}
 
 @keyframes pc-pulse {
   0% { transform: scale(0.92); opacity: 0.55; }
@@ -30,19 +143,155 @@ $pc-amber: #FFC857;
   to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
+@keyframes pc-fade-up {
+  from { opacity: 0; transform: translateY(28rpx); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pc-press-pop {
+  0% { transform: scale(1); }
+  40% { transform: scale(0.94); }
+  100% { transform: scale(1); }
+}
+
+@keyframes pc-aurora-drift {
+  0% { background-position: 0% 40%, 100% 20%, 50% 100%, 0% 0%; }
+  50% { background-position: 20% 30%, 80% 40%, 40% 90%, 0% 0%; }
+  100% { background-position: 0% 40%, 100% 20%, 50% 100%, 0% 0%; }
+}
+
+@keyframes pc-soft-glow {
+  0%, 100% { box-shadow: 0 8rpx 28rpx rgba(124, 58, 237, 0.22); }
+  50% { box-shadow: 0 12rpx 36rpx rgba(244, 63, 94, 0.2); }
+}
+
+@keyframes pc-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* 主 Tab 左右切页 */
+@keyframes pc-tab-leave-left {
+  from { transform: translate3d(0, 0, 0); opacity: 1; }
+  to { transform: translate3d(-22%, 0, 0); opacity: 0.25; }
+}
+@keyframes pc-tab-leave-right {
+  from { transform: translate3d(0, 0, 0); opacity: 1; }
+  to { transform: translate3d(22%, 0, 0); opacity: 0.25; }
+}
+@keyframes pc-tab-enter-from-right {
+  from { transform: translate3d(26%, 0, 0); opacity: 0.2; }
+  to { transform: translate3d(0, 0, 0); opacity: 1; }
+}
+@keyframes pc-tab-enter-from-left {
+  from { transform: translate3d(-26%, 0, 0); opacity: 0.2; }
+  to { transform: translate3d(0, 0, 0); opacity: 1; }
+}
+
+.pc-tab-leave-left {
+  animation: pc-tab-leave-left 0.18s cubic-bezier(0.4, 0, 1, 1) both;
+}
+.pc-tab-leave-right {
+  animation: pc-tab-leave-right 0.18s cubic-bezier(0.4, 0, 1, 1) both;
+}
+.pc-tab-enter-from-right {
+  animation: pc-tab-enter-from-right 0.3s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.pc-tab-enter-from-left {
+  animation: pc-tab-enter-from-left 0.3s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* 静态极光背景：去掉无限漂移动画，避免常驻 GPU 发热 */
 .pc-aurora {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+  box-sizing: border-box;
   background:
-    radial-gradient(circle at 20% 10%, rgba(46, 230, 166, 0.28), transparent 36%),
-    radial-gradient(circle at 85% 18%, rgba(41, 208, 255, 0.22), transparent 32%),
-    radial-gradient(circle at 50% 90%, rgba(255, 107, 74, 0.18), transparent 40%),
-    linear-gradient(160deg, #071018, #0B1A26 55%, #08141F);
+    radial-gradient(circle at 18% 8%, rgba(167, 139, 250, 0.32), transparent 38%),
+    radial-gradient(circle at 88% 16%, rgba(244, 63, 94, 0.22), transparent 34%),
+    radial-gradient(circle at 48% 92%, rgba(232, 121, 249, 0.16), transparent 42%),
+    linear-gradient(165deg, #0A0614 0%, #140A22 52%, #1A0B28 100%);
+  background-repeat: no-repeat;
 }
 
 .pc-glow-dot {
   width: 16rpx;
   height: 16rpx;
   border-radius: 50%;
-  background: $pc-mint;
-  box-shadow: 0 0 16rpx $pc-mint;
-  animation: pc-pulse 1.6s ease-in-out infinite;
+  background: $pc-purple;
+  box-shadow: 0 0 10rpx rgba(167, 139, 250, 0.55);
 }
+
+.pc-press:active {
+  transform: scale(0.96);
+  opacity: 0.92;
+  transition: transform 0.12s ease, opacity 0.12s ease;
+}
+
+.pc-enter {
+  animation: pc-fade-up 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes pc-refresher-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes pc-refresher-pulse {
+  0%, 100% { opacity: 0.55; transform: scale(0.92); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
+/* 仅图标：无背景框，蓝紫光弧 */
+.pc-refresher {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: visible;
+  pointer-events: none;
+  background: transparent;
+  transition:
+    height 0.32s cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 0.2s ease;
+  &.is-dragging {
+    transition: none;
+  }
+}
+.pc-refresher__icon {
+  position: relative;
+  width: 48rpx;
+  height: 48rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 0.15s ease;
+}
+.pc-refresher__ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 4rpx solid rgba(167, 139, 250, 0.18);
+  border-top-color: #38BDF8;
+  border-right-color: #818CF8;
+  box-shadow:
+    0 0 12rpx rgba(56, 189, 248, 0.35),
+    0 0 22rpx rgba(167, 139, 250, 0.22);
+  &.is-spinning {
+    animation: pc-refresher-spin 0.75s cubic-bezier(0.4, 0.1, 0.3, 1) infinite;
+  }
+}
+.pc-refresher__dot {
+  width: 10rpx;
+  height: 10rpx;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #38BDF8, #A78BFA);
+  box-shadow: 0 0 10rpx rgba(167, 139, 250, 0.55);
+}
+.pc-refresher.is-refreshing .pc-refresher__dot {
+  animation: pc-refresher-pulse 0.9s ease-in-out infinite;
+}
+

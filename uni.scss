@@ -1,1 +1,19 @@
-$pc-bg: #071018;
+// PulseChat 全局 SCSS 变量（uni.scss 会自动注入到各页）
+$pc-bg: #0A0614;
+$pc-bg-2: #140A22;
+$pc-bg-3: #1C1030;
+$pc-text: #F5EDFF;
+$pc-muted: #9B8AAF;
+$pc-purple: #A78BFA;
+$pc-purple-deep: #7C3AED;
+$pc-magenta: #E879F9;
+$pc-rose: #FB7185;
+$pc-red: #F43F5E;
+$pc-accent: #F43F5E;
+$pc-success: #A78BFA;
+
+$pc-radius-sm: 18rpx;
+$pc-radius-md: 28rpx;
+$pc-radius-lg: 36rpx;
+$pc-radius-xl: 44rpx;
+$pc-radius-pill: 999rpx;

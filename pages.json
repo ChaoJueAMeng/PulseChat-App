@@ -1,4 +1,7 @@
 {
+  "easycom": {
+    "autoscan": true
+  },
   "pages": [
     {
       "path": "pages/splash/splash",
@@ -15,74 +18,156 @@
       }
     },
     {
+      "path": "pages/register/register",
+      "style": {
+        "navigationStyle": "custom",
+        "app-plus": { "titleNView": false }
+      }
+    },
+    {
       "path": "pages/chats/chats",
       "style": {
+        "navigationStyle": "custom",
         "navigationBarTitleText": "脉冲",
-        "navigationBarBackgroundColor": "#071018",
-        "navigationBarTextStyle": "white"
+        "navigationBarBackgroundColor": "#24123F",
+        "navigationBarTextStyle": "white",
+        "disableScroll": true,
+        "app-plus": { "titleNView": false }
       }
     },
     {
       "path": "pages/chat/chat",
       "style": {
+        "navigationStyle": "custom",
         "navigationBarTitleText": "聊天",
-        "navigationBarBackgroundColor": "#071018",
-        "navigationBarTextStyle": "white"
+        "navigationBarBackgroundColor": "#24123F",
+        "navigationBarTextStyle": "white",
+        "disableScroll": true,
+        "app-plus": {
+          "titleNView": false,
+          "softinputMode": "adjustNothing"
+        }
       }
     },
     {
       "path": "pages/contacts/contacts",
       "style": {
+        "navigationStyle": "custom",
         "navigationBarTitleText": "通讯录",
-        "navigationBarBackgroundColor": "#071018",
-        "navigationBarTextStyle": "white"
+        "navigationBarBackgroundColor": "#24123F",
+        "navigationBarTextStyle": "white",
+        "app-plus": { "titleNView": false }
       }
     },
     {
       "path": "pages/mine/mine",
       "style": {
+        "navigationStyle": "custom",
         "navigationBarTitleText": "我的",
-        "navigationBarBackgroundColor": "#071018",
-        "navigationBarTextStyle": "white"
+        "navigationBarBackgroundColor": "#24123F",
+        "navigationBarTextStyle": "white",
+        "app-plus": { "titleNView": false }
       }
     },
     {
       "path": "pages/search/search",
       "style": {
+        "navigationStyle": "custom",
         "navigationBarTitleText": "搜索",
-        "navigationBarBackgroundColor": "#071018",
-        "navigationBarTextStyle": "white"
+        "navigationBarBackgroundColor": "#24123F",
+        "navigationBarTextStyle": "white",
+        "app-plus": { "titleNView": false }
       }
     },
     {
       "path": "pages/group-create/group-create",
       "style": {
+        "navigationStyle": "custom",
         "navigationBarTitleText": "创建群聊",
-        "navigationBarBackgroundColor": "#071018",
-        "navigationBarTextStyle": "white"
+        "navigationBarBackgroundColor": "#24123F",
+        "navigationBarTextStyle": "white",
+        "app-plus": { "titleNView": false }
       }
     },
     {
       "path": "pages/profile-edit/profile-edit",
       "style": {
+        "navigationStyle": "custom",
         "navigationBarTitleText": "编辑资料",
-        "navigationBarBackgroundColor": "#071018",
-        "navigationBarTextStyle": "white"
+        "navigationBarBackgroundColor": "#24123F",
+        "navigationBarTextStyle": "white",
+        "app-plus": { "titleNView": false }
+      }
+    },
+    {
+      "path": "pages/friend-profile/friend-profile",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "好友资料",
+        "navigationBarBackgroundColor": "#24123F",
+        "navigationBarTextStyle": "white",
+        "app-plus": { "titleNView": false }
+      }
+    },
+    {
+      "path": "pages/group-members/group-members",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "群成员",
+        "navigationBarBackgroundColor": "#24123F",
+        "navigationBarTextStyle": "white",
+        "app-plus": { "titleNView": false }
+      }
+    },
+    {
+      "path": "pages/group-add-members/group-add-members",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "添加成员",
+        "navigationBarBackgroundColor": "#24123F",
+        "navigationBarTextStyle": "white",
+        "app-plus": { "titleNView": false }
+      }
+    },
+    {
+      "path": "pages/chat-more/chat-more",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "聊天设置",
+        "navigationBarBackgroundColor": "#24123F",
+        "navigationBarTextStyle": "white",
+        "app-plus": { "titleNView": false }
+      }
+    },
+    {
+      "path": "pages/sticker-manage/sticker-manage",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "表情包管理",
+        "navigationBarBackgroundColor": "#24123F",
+        "navigationBarTextStyle": "white",
+        "app-plus": { "titleNView": false }
       }
     }
   ],
   "globalStyle": {
     "navigationBarTextStyle": "white",
     "navigationBarTitleText": "PulseChat",
-    "navigationBarBackgroundColor": "#071018",
-    "backgroundColor": "#071018",
-    "backgroundColorTop": "#071018",
-    "backgroundColorBottom": "#071018"
+    "navigationBarBackgroundColor": "#24123F",
+    "backgroundColor": "#0A0614",
+    "backgroundColorTop": "#24123F",
+    "backgroundColorBottom": "#0A0614",
+    "app-plus": {
+      "titleNView": {
+        "backgroundColor": "#24123F",
+        "titleColor": "#F5EDFF"
+      }
+    }
   },
   "tabBar": {
-    "color": "#7a8a9a",
-    "selectedColor": "#2EE6A6",
-    "backgroundColor": "#0A1520",
+    "color": "#8B7A9E",
+    "selectedColor": "#A78BFA",
+    "backgroundColor": "#12081C",
     "borderStyle": "black",
     "list": [
       {
