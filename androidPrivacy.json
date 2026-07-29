@@ -1,3 +1,35 @@
 {
-    "prompt" : "none"
+    "version" : "2",
+    "prompt" : "template",
+    "title" : "服务协议和隐私政策",
+    "message" : "<font color=\"#FFFFFF\">　　欢迎使用「脉冲」。请你务必审慎阅读、充分理解《服务协议》和《隐私政策》各条款，包括但不限于：为提供即时通讯、消息通知等服务，我们需要收集设备标识、网络状态、操作日志等信息，并可能使用麦克风、相册、通知权限。<br/>　　本应用基于 DCloud uni-app 开发，运行期间可能收集设备唯一识别码（IMEI/android ID/DEVICE_ID/IDFA、SIM 卡 IMSI、OAID）用于统计分析与消息推送（UniPush/个推）。详情见 <a href=\"https://dcloud.io/license/appprivacy.html\"><font color=\"#C4B5FD\">《DCloud App引擎隐私政策》</font></a> 与 <a href=\"https://docs.getui.com/privacy\"><font color=\"#C4B5FD\">《个推隐私政策》</font></a>。<br/>　　你可阅读<a href=\"static/agreement.html\"><font color=\"#C4B5FD\">《服务协议》</font></a>和<a href=\"static/privacy.html\"><font color=\"#C4B5FD\">《隐私政策》</font></a>了解详细信息。如你同意，请点击下方按钮开始使用。</font>",
+    "buttonAccept" : "同意并继续",
+    "buttonRefuse" : "暂不同意",
+    "hrefLoader" : "default",
+    "backToExit" : "true",
+    "second" : {
+        "title" : "确认提示",
+        "message" : "<font color=\"#FFFFFF\">　　进入应用前，你需先同意<a href=\"static/agreement.html\"><font color=\"#C4B5FD\">《服务协议》</font></a>和<a href=\"static/privacy.html\"><font color=\"#C4B5FD\">《隐私政策》</font></a>，否则将退出应用。</font>",
+        "buttonAccept" : "同意并继续",
+        "buttonRefuse" : "退出应用"
+    },
+    "disagreeMode" : {
+        "support" : false,
+        "loadNativePlugins" : false,
+        "visitorEntry" : false,
+        "showAlways" : false
+    },
+    "styles" : {
+        "backgroundColor" : "#1C1030",
+        "borderRadius" : "12px",
+        "title" : {
+            "color" : "#FFFFFF"
+        },
+        "buttonAccept" : {
+            "color" : "#FFFFFF"
+        },
+        "buttonRefuse" : {
+            "color" : "#FFFFFF"
+        }
+    }
 }
