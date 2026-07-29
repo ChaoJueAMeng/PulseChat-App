@@ -12,7 +12,13 @@
       </view>
     </view>
 
-    <view class="body">
+    <scroll-view
+      scroll-y
+      class="body"
+      :bounces="true"
+      @touchstart="onTabSwipeStart"
+      @touchend="onTabSwipeEnd"
+    >
       <view class="section pc-enter">
         <text class="sec-title">新的朋友</text>
         <view v-if="!pending.length" class="hint">暂无好友申请</view>
@@ -47,7 +53,7 @@
           </view>
         </view>
       </view>
-    </view>
+    </scroll-view>
   </view>
   <pc-tabbar :current="1" />
   </view>
@@ -150,11 +156,11 @@ onUnmounted(() => {
 
 <style scoped lang="scss">
 .contacts-page {
-  min-height: 100vh;
+  height: 100vh;
   overflow: hidden;
 }
 .contacts {
-  min-height: 100vh;
+  height: 100%;
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
@@ -162,9 +168,11 @@ onUnmounted(() => {
 .page-header {
   margin: 0;
   width: 100%;
+  flex-shrink: 0;
 }
 .body {
   flex: 1;
+  height: 0;
   padding: 28rpx 28rpx calc(140rpx + env(safe-area-inset-bottom));
   box-sizing: border-box;
 }

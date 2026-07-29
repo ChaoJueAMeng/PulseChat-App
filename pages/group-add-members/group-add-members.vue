@@ -9,7 +9,11 @@
       </view>
     </view>
 
-    <view class="body">
+    <scroll-view
+      scroll-y
+      class="body"
+      :bounces="true"
+    >
       <view class="panel pc-card pc-enter">
         <text class="label">从好友中选择</text>
         <view v-if="!candidates.length" class="hint">暂无可添加的好友</view>
@@ -32,17 +36,18 @@
       <button class="pc-btn create" :disabled="submitting" @tap="submit">
         {{ submitting ? '添加中…' : '添加成员' }}
       </button>
-    </view>
+    </scroll-view>
   </view>
   <pc-feedback />
 </template>
 
 <script setup>
 import { ref, computed } from 'vue'
-import { onLoad } from '@dcloudio/uni-app'
+import { onLoad, onShow } from '@dcloudio/uni-app'
 import { api } from '../../utils/request.js'
 import { getStore } from '../../store/index.js'
 import PcAvatar from '../../components/pc-avatar/pc-avatar.vue'
+
 
 const conversationId = ref(null)
 const friends = ref([])
@@ -75,6 +80,7 @@ async function load() {
   const [friendList, members] = await Promise.all([
     api.friends(),
     api.groupMembers(conversationId.value).catch(async () => {
+      // 兼容旧后端无 /members 时，回退到会话详情
       const detail = await api.conversation(conversationId.value)
       return detail.members || []
     })
@@ -122,16 +128,20 @@ onLoad(async (q) => {
     setTimeout(() => uni.navigateBack(), 400)
   }
 })
+
+onShow(() => {
+})
 </script>
 
 <style scoped lang="scss">
 .page {
-  min-height: 100vh;
+  height: 100vh;
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
+  overflow: hidden;
 }
-.body { flex: 1; padding: 28rpx; box-sizing: border-box; }
+.body { flex: 1; height: 0; padding: 28rpx; box-sizing: border-box; }
 .panel { border-radius: $pc-radius-lg; padding: 24rpx; margin-bottom: 18rpx; }
 .label { display: block; color: $pc-muted; margin-bottom: 12rpx; font-size: 24rpx; }
 .hint {

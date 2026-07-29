@@ -9,7 +9,11 @@
       </view>
     </view>
 
-    <view class="body">
+    <scroll-view
+      scroll-y
+      class="body"
+      :bounces="true"
+    >
       <view class="box pc-card pc-enter">
         <input class="input" v-model="keyword" placeholder="手机号 / 账号 / 昵称" confirm-type="search" @confirm="doSearch" />
         <button class="pc-btn btn" @tap="doSearch">搜索</button>
@@ -34,7 +38,7 @@
           @tap.stop="onAction(u)"
         >{{ actionLabel(u) }}</text>
       </view>
-    </view>
+    </scroll-view>
   </view>
   <pc-feedback />
 </template>
@@ -44,6 +48,7 @@ import { ref, computed } from 'vue'
 import { api } from '../../utils/request.js'
 import { showModal } from '../../utils/feedback.js'
 import PcAvatar from '../../components/pc-avatar/pc-avatar.vue'
+
 
 const keyword = ref('')
 const list = ref([])
@@ -133,12 +138,13 @@ function openProfile(u) {
 
 <style scoped lang="scss">
 .search {
-  min-height: 100vh;
+  height: 100vh;
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
+  overflow: hidden;
 }
-.body { flex: 1; padding: 28rpx; box-sizing: border-box; }
+.body { flex: 1; height: 0; padding: 28rpx; box-sizing: border-box; }
 .box {
   display: flex; gap: 14rpx; padding: 18rpx;
   border-radius: $pc-radius-lg; margin-bottom: 22rpx;

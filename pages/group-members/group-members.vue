@@ -15,7 +15,11 @@
       </view>
     </view>
 
-    <view class="body">
+    <scroll-view
+      scroll-y
+      class="body"
+      :bounces="true"
+    >
       <view v-if="removeMode && isOwner" class="tip pc-enter">选择要移除的成员（不可移除自己与群主）</view>
       <view v-if="!members.length" class="empty">暂无成员</view>
       <view
@@ -41,7 +45,7 @@
           @tap.stop="confirmRemove(m)"
         >移除</text>
       </view>
-    </view>
+    </scroll-view>
   </view>
   <pc-feedback />
 </template>
@@ -63,6 +67,7 @@ const ownerId = ref(null)
 const removeMode = ref(false)
 const statusBarHeight = uni.getSystemInfoSync().statusBarHeight || 20
 const headerStyle = computed(() => ({ paddingTop: statusBarHeight + 'px' }))
+
 
 const myId = computed(() => getStore().state.user?.id)
 const isOwner = computed(() => {
@@ -110,11 +115,8 @@ async function load() {
   if (removeMode.value && !isOwner.value) {
     removeMode.value = false
   }
-  try {
-    members.value = await api.groupMembers(conversationId.value) || []
-  } catch (e) {
-    members.value = detail.members || []
-  }
+  // 会话详情已含成员列表，避免再打独立 /members（旧后端无此接口会弹「接口不存在」）
+  members.value = detail.members || []
   // 群主排前面
   members.value = [...members.value].sort((a, b) => {
     const ao = isOwnerRole(a) ? 0 : (isBot(a) ? 2 : 1)
@@ -198,10 +200,11 @@ onShow(() => {
 
 <style scoped lang="scss">
 .page {
-  min-height: 100vh;
+  height: 100vh;
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
+  overflow: hidden;
 }
 .pc-nav-row {
   position: relative;
@@ -216,6 +219,7 @@ onShow(() => {
 }
 .body {
   flex: 1;
+  height: 0;
   padding: 28rpx;
   box-sizing: border-box;
 }

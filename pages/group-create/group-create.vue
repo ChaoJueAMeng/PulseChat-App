@@ -9,7 +9,11 @@
       </view>
     </view>
 
-    <view class="body">
+    <scroll-view
+      scroll-y
+      class="body"
+      :bounces="true"
+    >
       <view class="panel pc-card pc-enter">
         <input class="input" v-model="title" placeholder="群名称，比如 霓虹小队" />
       </view>
@@ -21,7 +25,7 @@
         </view>
       </view>
       <button class="pc-btn create" @tap="create">创建群聊</button>
-    </view>
+    </scroll-view>
   </view>
   <pc-feedback />
 </template>
@@ -29,6 +33,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { api } from '../../utils/request.js'
+
 
 const title = ref('')
 const friends = ref([])
@@ -65,12 +70,13 @@ async function create() {
 
 <style scoped lang="scss">
 .page {
-  min-height: 100vh;
+  height: 100vh;
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
+  overflow: hidden;
 }
-.body { flex: 1; padding: 28rpx; box-sizing: border-box; }
+.body { flex: 1; height: 0; padding: 28rpx; box-sizing: border-box; }
 .panel { border-radius: $pc-radius-lg; padding: 24rpx; margin-bottom: 18rpx; }
 .input {
   height: 84rpx; padding: 0 22rpx; color: $pc-text;

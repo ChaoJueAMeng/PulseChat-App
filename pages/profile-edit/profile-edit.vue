@@ -9,7 +9,11 @@
       </view>
     </view>
 
-    <view class="body">
+    <scroll-view
+      scroll-y
+      class="body"
+      :bounces="true"
+    >
       <view class="avatar-section pc-enter">
         <view class="avatar-ring">
           <pc-avatar
@@ -36,7 +40,7 @@
         <textarea class="area" v-model="bio" maxlength="255" placeholder="写点什么…" placeholder-class="ph" />
         <button class="pc-btn save" @tap="save">保存</button>
       </view>
-    </view>
+    </scroll-view>
   </view>
   <pc-feedback />
 </template>
@@ -47,6 +51,7 @@ import { api } from '../../utils/request.js'
 import { getStore } from '../../store/index.js'
 import { pickAndUploadAvatar } from '../../utils/avatar.js'
 import PcAvatar from '../../components/pc-avatar/pc-avatar.vue'
+
 
 const nickname = ref('')
 const bio = ref('')
@@ -98,13 +103,15 @@ async function save() {
 
 <style scoped lang="scss">
 .page {
-  min-height: 100vh;
+  height: 100vh;
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
+  overflow: hidden;
 }
 .body {
   flex: 1;
+  height: 0;
   padding: 28rpx;
   box-sizing: border-box;
 }

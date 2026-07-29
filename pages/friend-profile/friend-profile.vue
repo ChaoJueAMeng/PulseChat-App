@@ -9,7 +9,11 @@
       </view>
     </view>
 
-    <view class="body">
+    <scroll-view
+      scroll-y
+      class="body"
+      :bounces="true"
+    >
       <view class="hero pc-card pc-enter">
         <pc-avatar
           :url="user?.avatar"
@@ -63,24 +67,25 @@
           @tap="addFriend"
         >{{ applied ? '已申请' : '加好友' }}</button>
       </view>
-    </view>
+    </scroll-view>
   </view>
   <pc-feedback />
 </template>
 
 <script setup>
 import { ref, computed } from 'vue'
-import { onLoad, onBackPress } from '@dcloudio/uni-app'
+import { onLoad, onShow, onBackPress } from '@dcloudio/uni-app'
 import { api } from '../../utils/request.js'
 import { fullUrl } from '../../utils/url.js'
 import { cacheLocalAs, getDisplayUrl } from '../../utils/image-cache.js'
-import { isPinned, setPinned, getBackground, setBackground } from '../../utils/chat-settings.js'
+import { isPinned, syncBackgroundFromDetail } from '../../utils/chat-settings.js'
 import { getStore } from '../../store/index.js'
 import { showModal } from '../../utils/feedback.js'
 import { handlePageBackPress } from '../../utils/quit.js'
 import PcAvatar from '../../components/pc-avatar/pc-avatar.vue'
 
 onBackPress(() => handlePageBackPress())
+
 
 const userId = ref(null)
 const user = ref(null)
@@ -158,6 +163,9 @@ onLoad(async (q) => {
   syncTitle()
 })
 
+onShow(() => {
+})
+
 async function loadFriendStatus() {
   const targetId = user.value?.id || userId.value
   if (!targetId) return
@@ -210,7 +218,9 @@ async function promptRemark(opts = {}) {
     remark.value = (vo?.remark || next || '').trim()
     syncTitle()
     uni.showToast({ title: remark.value ? '备注已保存' : '已清除备注', icon: 'none' })
-  } catch (e) {}
+  } catch (e) {
+    // request.js 已统一 toast；此处避免静默失败被误认为已保存
+  }
 }
 
 async function acceptIncoming() {
@@ -248,9 +258,9 @@ async function ensureConv() {
 async function loadConvSettings() {
   try {
     await ensureConv()
-    pinned.value = isPinned(convId.value)
-    chatBg.value = getBackground(convId.value)
     const detail = await api.conversation(convId.value)
+    pinned.value = isPinned(detail)
+    chatBg.value = syncBackgroundFromDetail(convId.value, detail)
     muted.value = !!(detail.muted ?? detail.mute)
   } catch (e) {}
 }
@@ -300,11 +310,17 @@ async function openChat() {
   })
 }
 
-function togglePin() {
+async function togglePin() {
   if (!convId.value) return
-  pinned.value = !pinned.value
-  setPinned(convId.value, pinned.value)
-  uni.showToast({ title: pinned.value ? '已置顶' : '已取消置顶', icon: 'none' })
+  const next = !pinned.value
+  try {
+    const detail = await api.updateConvSettings(convId.value, { pinned: next ? 1 : 0 })
+    pinned.value = !!(detail?.pinned ?? (next ? 1 : 0))
+    getStore().upsertConversation(detail || { id: convId.value, pinned: next ? 1 : 0, pinnedAt: next ? Date.now() : null })
+    uni.showToast({ title: pinned.value ? '已置顶' : '已取消置顶', icon: 'none' })
+  } catch (e) {
+    uni.showToast({ title: e?.message || '设置失败', icon: 'none' })
+  }
 }
 
 function toggleMute() {
@@ -332,9 +348,17 @@ async function applyMute(next) {
 async function pickChatBackground() {
   const id = await ensureConv()
   if (chatBg.value) {
-    setBackground(id, '')
-    chatBg.value = ''
-    uni.showToast({ title: '已清除背景', icon: 'none' })
+    uni.showLoading({ title: '清除中…', mask: true })
+    try {
+      const detail = await api.updateConvSettings(id, { background: '' })
+      syncBackgroundFromDetail(id, detail || { background: '' })
+      chatBg.value = ''
+      uni.showToast({ title: '已清除背景', icon: 'none' })
+    } catch (e) {
+      uni.showToast({ title: e?.message || '清除失败', icon: 'none' })
+    } finally {
+      uni.hideLoading()
+    }
     return
   }
   uni.chooseImage({
@@ -344,16 +368,15 @@ async function pickChatBackground() {
       uni.showLoading({ title: '设置中…', mask: true })
       try {
         const up = await api.upload(path)
-        const url = up.url || path
+        const url = up.url || ''
+        if (!url) throw new Error('上传失败')
         await cacheLocalAs(url, path)
-        setBackground(id, url)
-        chatBg.value = url
+        const detail = await api.updateConvSettings(id, { background: url })
+        const saved = syncBackgroundFromDetail(id, detail || { background: url })
+        chatBg.value = saved || url
         uni.showToast({ title: '背景已设置', icon: 'none' })
       } catch (e) {
-        const local = await cacheLocalAs('', path)
-        setBackground(id, local || path)
-        chatBg.value = local || path
-        uni.showToast({ title: '背景已设置（本地）', icon: 'none' })
+        uni.showToast({ title: e?.message || '设置失败', icon: 'none' })
       } finally {
         uni.hideLoading()
       }
@@ -388,13 +411,14 @@ function confirmDeleteFriend() {
 
 <style scoped lang="scss">
 .profile {
-  min-height: 100vh;
+  height: 100vh;
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
   position: relative;
+  overflow: hidden;
 }
-.body { flex: 1; padding: 28rpx; box-sizing: border-box; }
+.body { flex: 1; height: 0; padding: 28rpx; box-sizing: border-box; }
 .hero {
   display: flex;
   gap: 28rpx;

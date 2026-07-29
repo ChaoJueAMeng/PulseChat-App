@@ -12,7 +12,13 @@
       </view>
     </view>
 
-    <view class="body">
+    <scroll-view
+      scroll-y
+      class="body"
+      :bounces="true"
+      @touchstart="onTabSwipeStart"
+      @touchend="onTabSwipeEnd"
+    >
       <view class="hero pc-card pc-enter">
         <pc-avatar
           :url="user?.avatar"
@@ -54,7 +60,7 @@
         <text class="label">个性签名</text>
         <text class="text">{{ user?.bio || '这个人很酷，什么都没写' }}</text>
       </view>
-    </view>
+    </scroll-view>
   </view>
   <pc-tabbar :current="2" />
   </view>
@@ -136,11 +142,11 @@ onShow(() => {
 
 <style scoped lang="scss">
 .mine-page {
-  min-height: 100vh;
+  height: 100vh;
   overflow: hidden;
 }
 .mine {
-  min-height: 100vh;
+  height: 100%;
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
@@ -148,9 +154,11 @@ onShow(() => {
 .page-header {
   margin: 0;
   width: 100%;
+  flex-shrink: 0;
 }
 .body {
   flex: 1;
+  height: 0;
   padding: 28rpx 28rpx calc(140rpx + env(safe-area-inset-bottom));
   box-sizing: border-box;
 }
