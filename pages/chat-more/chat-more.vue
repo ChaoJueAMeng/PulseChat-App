@@ -9,7 +9,11 @@
       </view>
     </view>
 
-    <view class="body">
+    <scroll-view
+      scroll-y
+      class="body"
+      :bounces="true"
+    >
       <!-- 群资料 -->
       <view v-if="isGroup" class="hero pc-card pc-enter">
         <view class="avatar-wrap">
@@ -106,10 +110,14 @@
         </view>
       </view>
 
+      <view v-if="isAiPrivate" class="menu pc-card pc-enter danger-menu" style="animation-delay: 0.1s">
+        <view class="item danger pc-press" @tap="confirmClearAiHistory">清空聊天记录</view>
+      </view>
+
       <view v-if="isFriendPrivate" class="menu pc-card pc-enter danger-menu" style="animation-delay: 0.1s">
         <view class="item danger pc-press" @tap="confirmDeleteFriend">删除好友</view>
       </view>
-    </view>
+    </scroll-view>
   </view>
   <pc-feedback />
 </template>
@@ -120,12 +128,13 @@ import { onLoad, onShow, onBackPress } from '@dcloudio/uni-app'
 import { api } from '../../utils/request.js'
 import { fullUrl } from '../../utils/url.js'
 import { getStore } from '../../store/index.js'
-import { isPinned, setPinned, getBackground, setBackground } from '../../utils/chat-settings.js'
+import { isPinned, syncBackgroundFromDetail } from '../../utils/chat-settings.js'
 import { cacheLocalAs, getDisplayUrl } from '../../utils/image-cache.js'
 import { handlePageBackPress } from '../../utils/quit.js'
 import PcAvatar from '../../components/pc-avatar/pc-avatar.vue'
 
 onBackPress(() => handlePageBackPress())
+
 
 const conversationId = ref(null)
 const convType = ref(1)
@@ -152,6 +161,7 @@ const isOwner = computed(() => {
     && Number(myId.value) === Number(ownerId.value)
 })
 const isPrivateHuman = computed(() => Number(convType.value) === 1 && peer.value && !peer.value.bot)
+const isAiPrivate = computed(() => Number(convType.value) === 1 && peer.value && !!peer.value.bot)
 const isFriendPrivate = computed(() => isPrivateHuman.value && isFriend.value)
 const isNonFriendPrivate = computed(() => isPrivateHuman.value && !isFriend.value)
 const memberCount = computed(() => (members.value || []).filter(m => Number(m.memberType) !== 2).length
@@ -174,8 +184,8 @@ async function load() {
   editNotice.value = detail.notice || ''
   members.value = detail.members || []
   muted.value = !!(detail.muted ?? detail.mute)
-  pinned.value = isPinned(conversationId.value)
-  chatBg.value = getBackground(conversationId.value) || ''
+  pinned.value = isPinned(detail)
+  chatBg.value = syncBackgroundFromDetail(conversationId.value, detail) || ''
 
   if (isPrivateHuman.value && peer.value?.id) {
     try {
@@ -311,11 +321,17 @@ async function applyAddFriend() {
   }
 }
 
-function onPinChange(e) {
+async function onPinChange(e) {
   const next = !!e.detail.value
-  pinned.value = next
-  setPinned(conversationId.value, next)
-  uni.showToast({ title: next ? '已置顶' : '已取消置顶', icon: 'none' })
+  try {
+    const detail = await api.updateConvSettings(conversationId.value, { pinned: next ? 1 : 0 })
+    pinned.value = !!(detail?.pinned ?? (next ? 1 : 0))
+    getStore().upsertConversation(detail || { id: conversationId.value, pinned: next ? 1 : 0, pinnedAt: next ? Date.now() : null })
+    uni.showToast({ title: next ? '已置顶' : '已取消置顶', icon: 'none' })
+  } catch (err) {
+    pinned.value = !next
+    uni.showToast({ title: err?.message || '设置失败', icon: 'none' })
+  }
 }
 
 async function onNotifyChange(e) {
@@ -332,11 +348,19 @@ async function onNotifyChange(e) {
   }
 }
 
-function pickChatBackground() {
+async function pickChatBackground() {
   if (chatBg.value) {
-    setBackground(conversationId.value, '')
-    chatBg.value = ''
-    uni.showToast({ title: '已清除背景', icon: 'none' })
+    uni.showLoading({ title: '清除中…', mask: true })
+    try {
+      const detail = await api.updateConvSettings(conversationId.value, { background: '' })
+      syncBackgroundFromDetail(conversationId.value, detail || { background: '' })
+      chatBg.value = ''
+      uni.showToast({ title: '已清除背景', icon: 'none' })
+    } catch (e) {
+      uni.showToast({ title: e?.message || '清除失败', icon: 'none' })
+    } finally {
+      uni.hideLoading()
+    }
     return
   }
   uni.chooseImage({
@@ -346,16 +370,15 @@ function pickChatBackground() {
       uni.showLoading({ title: '设置中…', mask: true })
       try {
         const up = await api.upload(path)
-        const url = up.url || path
+        const url = up.url || ''
+        if (!url) throw new Error('上传失败')
         await cacheLocalAs(url, path)
-        setBackground(conversationId.value, url)
-        chatBg.value = url
+        const detail = await api.updateConvSettings(conversationId.value, { background: url })
+        const saved = syncBackgroundFromDetail(conversationId.value, detail || { background: url })
+        chatBg.value = saved || url
         uni.showToast({ title: '背景已设置', icon: 'none' })
       } catch (e) {
-        const local = await cacheLocalAs('', path)
-        setBackground(conversationId.value, local || path)
-        chatBg.value = local || path
-        uni.showToast({ title: '背景已设置（本地）', icon: 'none' })
+        uni.showToast({ title: e?.message || '设置失败', icon: 'none' })
       } finally {
         uni.hideLoading()
       }
@@ -384,17 +407,71 @@ function confirmDeleteFriend() {
     }
   })
 }
+
+function confirmClearAiHistory() {
+  if (!isAiPrivate.value || !conversationId.value) return
+  uni.showModal({
+    title: '清空聊天记录',
+    content: '将删除与 Kimi 的本地与云端全部聊天记录，之后 Kimi 将不再记得此前对话。此操作不可恢复。',
+    confirmText: '清空',
+    confirmColor: '#F43F5E',
+    success: async (res) => {
+      if (!res.confirm) return
+      uni.showLoading({ title: '清空中…', mask: true })
+      try {
+        const vo = await api.clearAiChatHistory(conversationId.value)
+        const store = getStore()
+        if (vo) {
+          store.upsertConversation({
+            ...vo,
+            lastMsgId: null,
+            lastMsgPreview: '',
+            lastMsgAt: null,
+            unreadCount: 0,
+            aiStreaming: false,
+            aiStreamClientMsgId: null,
+            aiStreamContent: ''
+          })
+        } else {
+          store.upsertConversation({
+            id: conversationId.value,
+            lastMsgId: null,
+            lastMsgPreview: '',
+            lastMsgAt: null,
+            unreadCount: 0
+          })
+        }
+        try {
+          uni.setStorageSync('pc_cleared_conv_' + conversationId.value, Date.now())
+        } catch (e) {}
+        try {
+          uni.$emit('pc-conversation-cleared', { conversationId: conversationId.value })
+        } catch (e) {}
+        uni.showToast({ title: '已清空聊天记录', icon: 'none' })
+        setTimeout(() => {
+          uni.navigateBack()
+        }, 350)
+      } catch (e) {
+        uni.showToast({ title: e?.message || '清空失败', icon: 'none' })
+      } finally {
+        uni.hideLoading()
+      }
+    }
+  })
+}
 </script>
 
 <style scoped lang="scss">
 .page {
-  min-height: 100vh;
+  height: 100vh;
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
+  overflow: hidden;
 }
 .body {
   flex: 1;
+  height: 0;
   padding: 28rpx;
   padding-bottom: calc(40rpx + env(safe-area-inset-bottom));
   box-sizing: border-box;

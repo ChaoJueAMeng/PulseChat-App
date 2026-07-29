@@ -23,6 +23,29 @@ export function getReplyMeta(msg) {
   return extra.reply || null
 }
 
+/** 图片消息配文（extraJson.caption） */
+export function getCaption(msg) {
+  const extra = parseExtra(msg?.extraJson)
+  const cap = extra.caption
+  if (cap == null) return ''
+  const s = String(cap).trim()
+  return s
+}
+
+/** 图片消息全部 URL：优先 extraJson.images，否则 content 单图 */
+export function getImageUrls(msg) {
+  const extra = parseExtra(msg?.extraJson)
+  const list = Array.isArray(extra.images) ? extra.images : []
+  const urls = []
+  list.forEach((u) => {
+    const s = u == null ? '' : String(u).trim()
+    if (s && !urls.includes(s)) urls.push(s)
+  })
+  if (urls.length) return urls
+  const single = msg?.content == null ? '' : String(msg.content).trim()
+  return single ? [single] : []
+}
+
 export function getReactions(msg) {
   const extra = parseExtra(msg?.extraJson)
   const list = Array.isArray(extra.reactions) ? extra.reactions : []
@@ -84,7 +107,13 @@ export function buildReplyExtra(target, senderName, baseExtra) {
 
 export function msgPreviewText(m, max = 48) {
   if (!m) return ''
-  if (m.msgType === 2) return '[图片]'
+  if (m.msgType === 2) {
+    const n = getImageUrls(m).length
+    const prefix = n > 1 ? `[图片×${n}]` : '[图片]'
+    const cap = getCaption(m)
+    const raw = cap ? `${prefix} ${cap.replace(/\s+/g, ' ').trim()}` : prefix
+    return raw.length > max ? raw.slice(0, max) + '…' : raw
+  }
   if (m.msgType === 3) return '[表情]'
   if (m.msgType === 6) return '[语音]'
   if (m.msgType === 4) return '已撤回的消息'

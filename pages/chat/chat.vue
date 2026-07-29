@@ -1,5 +1,5 @@
 <template>
-  <view class="chat-page pc-aurora" :style="pageStyle">
+  <view class="chat-page pc-aurora" :style="pageStyle" @touchstart="onOutsideMenuTouch">
     <view class="nav-bar pc-nav-bar" :style="navBarWrapStyle">
       <view class="nav-inner" :style="navInnerStyle">
         <view class="nav-back pc-press" @tap="goBack">
@@ -22,14 +22,16 @@
     <scroll-view
       scroll-y
       class="msgs"
+      :bounces="true"
       :scroll-into-view="scrollInto"
       :scroll-top="scrollTop"
       :scroll-with-animation="scrollAnim"
+      :upper-threshold="LOAD_MORE_THRESHOLD"
       @scroll="onScroll"
       @scrolltoupper="loadMore"
     >
-      <view class="msgs-inner" :style="msgsInnerStyle">
-        <view v-if="typingText" class="typing">{{ typingText }}</view>
+      <view class="msgs-inner">
+        <view v-if="!hasMoreHistory && messages.length" class="history-end">没有更早的消息了</view>
         <view
           v-for="(m, index) in messages"
           :key="m.clientMsgId || m.id"
@@ -50,6 +52,9 @@
                 :size="72"
                 :seed="m.senderId || 0"
                 :show-badge="isBotSender(m)"
+                clickable
+                @tap.stop="openSenderProfile(m)"
+                @longpress.stop="mentionSender(m)"
               />
             </view>
             <view class="msg-col">
@@ -59,9 +64,13 @@
                 :class="{
                   active: menuMsg && menuMsg.id === m.id,
                   sticker: m.msgType === MSG_EMOJI,
-                  media: m.msgType === 2
+                  media: m.msgType === 2 && !m.__imageCaption && m.__imageCount <= 1,
+                  'img-with-caption': m.msgType === 2 && (!!m.__imageCaption || m.__imageCount > 1)
                 }"
-                @longpress.stop="onMsgLong(m)"
+                @touchstart="onBubbleTouchStart(m, $event)"
+                @touchmove="onBubbleTouchMove"
+                @touchend="onBubbleTouchEnd"
+                @touchcancel="onBubbleTouchCancel"
               >
                 <view
                   v-if="replyOf(m)"
@@ -71,18 +80,29 @@
                   <text class="quote-name">{{ replyOf(m).senderName || '用户' }}</text>
                   <text class="quote-text">{{ replyOf(m).content || '[消息]' }}</text>
                 </view>
-                <image
-                  v-if="m.msgType === 2 && !mediaFailed(m)"
-                  :src="mediaSrc(m)"
-                  mode="widthFix"
-                  class="img"
-                  :fade-show="false"
-                  @error="onMediaError(m)"
-                  @tap="preview(m.content)"
-                />
-                <view v-else-if="m.msgType === 2" class="img-fallback" @tap="retryMedia(m)">
-                  <text class="img-fallback-text">图片加载失败，点按重试</text>
-                </view>
+                <template v-if="m.msgType === 2">
+                  <view
+                    class="img-album"
+                    :class="[
+                      m.__imageCount > 1 ? 'multi' : '',
+                      m.__imageCount > 1 ? ('count-' + Math.min(m.__imageCount, 4)) : ''
+                    ]"
+                  >
+                    <image
+                      v-for="(url, ii) in m.__imageUrls"
+                      :id="'mi-' + m.id + '-' + ii"
+                      :key="ii + '-' + url"
+                      :src="mediaSrcAt(m, ii)"
+                      :mode="m.__imageCount > 1 ? 'aspectFill' : 'widthFix'"
+                      class="img"
+                      :class="{ cell: m.__imageCount > 1 }"
+                      :fade-show="false"
+                      @error="onMediaErrorAt(m, ii)"
+                      @tap="previewImages(m, ii)"
+                    />
+                  </view>
+                  <text v-if="m.__imageCaption" class="txt img-caption">{{ m.__imageCaption }}</text>
+                </template>
                 <image
                   v-else-if="m.msgType === MSG_EMOJI && !mediaFailed(m)"
                   :src="mediaSrc(m)"
@@ -90,7 +110,7 @@
                   class="sticker-img"
                   :fade-show="false"
                   @error="onMediaError(m)"
-                  @tap="preview(m.content)"
+                  @tap="previewImages(m)"
                 />
                 <view v-else-if="m.msgType === MSG_EMOJI" class="img-fallback sticker-fallback" @tap="retryMedia(m)">
                   <text class="img-fallback-text">表情加载失败</text>
@@ -125,6 +145,10 @@
       </view>
     </scroll-view>
 
+    <view v-if="showTypingIndicator" class="typing-bar">
+      <text class="typing">{{ typingText }}</text>
+    </view>
+
     <view
       v-if="auxInputOpen"
       class="aux-dismiss-mask"
@@ -132,8 +156,13 @@
     />
 
     <view v-if="showAt" class="at-panel pc-card" @tap.stop>
-      <view class="at-item" v-for="mem in members" :key="mem.userId" @tap="pickAt(mem)">
-        @{{ memberDisplayName(mem) || mem.nickname }}{{ mem.memberType === 2 ? ' · AI' : '' }}
+      <view
+        class="at-item"
+        v-for="mem in members"
+        :key="mem.userId"
+        @tap="pickAt(mem)"
+      >
+        @{{ memberMentionName(mem) || mem.nickname }}{{ mem.memberType === 2 ? ' · AI' : '' }}
       </view>
     </view>
 
@@ -183,6 +212,28 @@
           </view>
           <text class="reply-bar__close pc-press" @tap="clearReply">×</text>
         </view>
+        <view v-if="stagedImages.length" class="stage-bar">
+          <scroll-view scroll-x class="stage-bar__scroll" :show-scrollbar="false">
+            <view class="stage-bar__list">
+              <view
+                v-for="(item, idx) in stagedImages"
+                :key="item.id"
+                class="stage-bar__item"
+              >
+                <image class="stage-bar__thumb" :src="item.localPath" mode="aspectFill" />
+                <text class="stage-bar__remove pc-press" @tap="removeStagedImage(idx)">×</text>
+              </view>
+              <view
+                v-if="stagedImages.length < STAGE_IMAGE_MAX"
+                class="stage-bar__add pc-press"
+                @tap="pickImage"
+              >
+                <text class="stage-bar__add-icon">＋</text>
+              </view>
+            </view>
+          </scroll-view>
+          <text class="stage-bar__clear pc-press" @tap="clearStagedImages">清空</text>
+        </view>
         <view class="input-row">
           <view class="input-field">
             <view
@@ -210,7 +261,7 @@
                 @input="onTextInput"
                 @linechange="onLineChange"
                 @keyboardheightchange="onTextareaKeyboard"
-                placeholder="说点有脉冲感的…"
+                :placeholder="stagedImages.length ? '添加说明（可选）…' : '说点有脉冲感的…'"
                 placeholder-class="ph"
               />
               <view v-if="showExpand" class="expand-btn pc-press" @tap="openEditor">
@@ -232,7 +283,13 @@
             </view>
           </view>
           <text class="tool pc-press" :class="{ active: showEmoji }" @tap="toggleEmoji">☺</text>
-          <text class="tool pc-press" :class="{ active: showSticker }" @tap="toggleSticker">贴</text>
+          <view class="tool pc-press" :class="{ active: showSticker }" @tap="toggleSticker">
+            <view class="tool-ico ico-heart">
+              <view class="ico-heart__l"></view>
+              <view class="ico-heart__r"></view>
+              <view class="ico-heart__tip"></view>
+            </view>
+          </view>
           <view class="tool pc-press" @tap="pickImage">
             <view class="tool-ico ico-img">
               <view class="ico-img__frame"></view>
@@ -250,7 +307,6 @@
       :show="!!menuMsg"
       :anchor="menuAnchor"
       :actions="menuActions"
-      @close="closeMsgMenu"
       @action="onMenuAction"
       @react="onMenuReact"
     />
@@ -261,7 +317,7 @@
           <text class="fwd-title">转发到</text>
           <text class="fwd-close pc-press" @tap="closeForward">取消</text>
         </view>
-        <scroll-view scroll-y class="fwd-list">
+        <scroll-view scroll-y class="fwd-list" :bounces="true">
           <view v-if="!forwardList.length" class="fwd-empty">暂无会话可转发</view>
           <view
             v-for="c in forwardList"
@@ -280,18 +336,20 @@
 </template>
 
 <script setup>
-import { ref, computed, nextTick, onMounted, onUnmounted, getCurrentInstance } from 'vue'
-import { onLoad, onShow, onUnload, onBackPress } from '@dcloudio/uni-app'
+import { ref, computed, watch, nextTick, onMounted, onUnmounted, getCurrentInstance } from 'vue'
+import { onLoad, onShow, onHide, onUnload, onBackPress } from '@dcloudio/uni-app'
 import { api } from '../../utils/request.js'
 import { fullUrl } from '../../utils/url.js'
 import { getDisplayUrl, ensureCached, prefetchAll, forgetCached, cacheLocalAs, isLocalMediaPath } from '../../utils/image-cache.js'
 import { getStore } from '../../store/index.js'
 import { subscribeConversation, onWs, sendStomp } from '../../utils/ws.js'
-import { getBackground } from '../../utils/chat-settings.js'
+import { getBackground, syncBackgroundFromDetail } from '../../utils/chat-settings.js'
 import { MSG_VOICE, parseVoiceExtra, formatVoiceDuration } from '../../utils/voice.js'
 import { MSG_EMOJI } from '../../utils/sticker.js'
 import {
   getReplyMeta,
+  getCaption,
+  getImageUrls,
   getReactions,
   groupReactions,
   toggleReaction,
@@ -301,6 +359,12 @@ import {
   stringifyExtra
 } from '../../utils/msg-extra.js'
 import { handlePageBackPress } from '../../utils/quit.js'
+import {
+  feedbackState,
+  updatePreviewAlbum,
+  setPreviewReachEarlierHandler,
+  closePreview
+} from '../../utils/feedback.js'
 import PcEmojiPanel from '../../components/pc-emoji-panel/pc-emoji-panel.vue'
 import PcStickerPanel from '../../components/pc-sticker-panel/pc-sticker-panel.vue'
 import PcMsgMenu from '../../components/pc-msg-menu/pc-msg-menu.vue'
@@ -315,6 +379,10 @@ onBackPress(() => {
   }
   if (showForward.value) {
     closeForward()
+    return true
+  }
+  if (stagedImages.value.length) {
+    clearStagedImages()
     return true
   }
   if (replyTarget.value) {
@@ -366,7 +434,25 @@ const inputLineCount = ref(1)
 const atMaxHeight = ref(false)
 const menuMsg = ref(null)
 const menuAnchor = ref(null)
+/** 长按多图消息时命中的图片 URL（用于「添加表情」） */
+const menuStickerUrl = ref(null)
+/** 最近一次气泡触摸坐标，供 longpress 无坐标时回退 */
+const lastBubbleTouch = ref({ x: 0, y: 0 })
+const LONG_PRESS_DELAY_MS = 380
+const LONG_PRESS_MOVE_PX = 10
+const bubblePressState = {
+  active: false,
+  moved: false,
+  fired: false,
+  msg: null,
+  startX: 0,
+  startY: 0
+}
 const replyTarget = ref(null)
+/** 待发送图片：[{ id, localPath }]，发送时再上传 */
+const STAGE_IMAGE_MAX = 9
+const stagedImages = ref([])
+let stagedImageSeq = 0
 const showForward = ref(false)
 const forwardList = ref([])
 const forwardSource = ref(null)
@@ -377,8 +463,20 @@ const INPUT_MAX_LINES = 5
 const EXPAND_CHAR_THRESHOLD = 80
 /** 距底部小于该阈值视为「在底部」（px） */
 const NEAR_BOTTOM_PX = 80
+/** 距顶部小于该阈值时预取更早消息（px），并同步给 scroll-view upper-threshold */
+const LOAD_MORE_THRESHOLD = 400
+/** 与后端默认分页一致 */
+const HISTORY_PAGE_SIZE = 30
+const loadingMore = ref(false)
+const hasMoreHistory = ref(true)
 let nearBottom = true
 let msgsViewH = 0
+/** 当前滚动位置（onScroll 维护，用于插入历史后还原） */
+let currentScrollTop = 0
+/** 防止滚动事件连发重复请求 */
+let loadMoreLock = false
+/** 预览相册拉取更早图片的并发锁 */
+let previewEarlierLock = false
 let offs = []
 let typingTimer = null
 let scrollTimers = []
@@ -395,6 +493,7 @@ let aiDeltaMap = Object.create(null)
 let aiFlushTimer = null
 let aiScrollPending = false
 let typingActive = false
+let bubbleLongPressTimer = null
 
 const isPrivateHuman = computed(() => convType.value === 1 && peer.value && !peer.value.bot)
 const isAiPrivate = computed(() => convType.value === 1 && peer.value && !!peer.value.bot)
@@ -402,6 +501,8 @@ const isNonFriendPrivate = computed(() => isPrivateHuman.value && !isFriend.valu
 const blockedPrivateChat = computed(() => isNonFriendPrivate.value)
 const showComposer = computed(() => !blockedPrivateChat.value)
 const isGroupChat = computed(() => convType.value === 2)
+const showTypingIndicator = computed(() => isPrivateHuman.value && !!typingText.value)
+const myUserId = computed(() => store.state.user?.id)
 
 const navBarWrapStyle = computed(() => ({
   paddingTop: statusBarHeight.value + 'px',
@@ -429,23 +530,14 @@ const showExpand = computed(() => {
 })
 
 const keyboardHeight = ref(0)
+let offConversationSubscription = null
+let draftPersistTimer = null
+let draftSyncSeq = 0
 
+/** adjustResize 下视口已收缩，只需去掉被键盘盖住的 safe-area，勿再加 bottom */
 const composerWrapStyle = computed(() => {
-  const kb = keyboardHeight.value
-  if (kb <= 0) return {}
-  return {
-    bottom: kb + 'px',
-    // 键盘已盖住底部安全区，去掉额外 inset，避免空隙过大
-    paddingBottom: '12px'
-  }
-})
-
-const msgsInnerStyle = computed(() => {
-  const kb = keyboardHeight.value
-  if (kb <= 0) return {}
-  return {
-    paddingBottom: `calc(320rpx + ${kb}px)`
-  }
+  if (keyboardHeight.value <= 0) return {}
+  return { paddingBottom: '12px' }
 })
 
 const pageStyle = computed(() => {
@@ -476,12 +568,82 @@ function applyKeyboardHeight(height) {
       uni.createSelectorQuery()
         .select('.msgs')
         .boundingClientRect((rect) => {
-          if (rect?.height) msgsViewH = rect.height
+          if (rect?.height) {
+            msgsViewH = rect.height
+          }
         })
         .exec()
     })
   }
 }
+
+function syncComposerMetrics(value) {
+  const lines = Math.max(1, String(value || '').split('\n').length)
+  inputLineCount.value = lines
+  atMaxHeight.value = lines >= INPUT_MAX_LINES
+}
+
+function clearDraftPersistTimer() {
+  if (draftPersistTimer) {
+    clearTimeout(draftPersistTimer)
+    draftPersistTimer = null
+  }
+}
+
+async function persistDraftNow(updatedAt = Date.now()) {
+  if (!conversationId.value) return
+  const content = String(text.value || '')
+  const mentions = Array.isArray(atUserIds.value)
+    ? atUserIds.value.map((id) => Number(id)).filter((id) => Number.isFinite(id))
+    : []
+  const seq = ++draftSyncSeq
+  try {
+    const detail = await api.updateConvDraft(conversationId.value, {
+      text: content,
+      atUserIds: mentions,
+      updatedAt
+    })
+    if (seq !== draftSyncSeq || !detail) return
+    getStore().upsertConversation(detail)
+  } catch (e) {}
+}
+
+function queueDraftPersist(delay = 260) {
+  clearDraftPersistTimer()
+  const updatedAt = Date.now()
+  draftPersistTimer = setTimeout(() => {
+    draftPersistTimer = null
+    persistDraftNow(updatedAt)
+  }, delay)
+}
+
+function restoreDraft(detail) {
+  const draft = detail && typeof detail === 'object' ? detail : {}
+  text.value = typeof draft.draftText === 'string' ? draft.draftText : ''
+  atUserIds.value = Array.isArray(draft.draftAtUserIds)
+    ? draft.draftAtUserIds.map((id) => Number(id)).filter((id) => Number.isFinite(id))
+    : []
+  cursor.value = text.value.length
+  syncComposerMetrics(text.value)
+}
+
+function bindConversationSubscription() {
+  if (!conversationId.value) return
+  if (offConversationSubscription) {
+    try { offConversationSubscription() } catch (e) {}
+  }
+  offConversationSubscription = subscribeConversation(conversationId.value)
+}
+
+function unbindConversationSubscription() {
+  if (!offConversationSubscription) return
+  try { offConversationSubscription() } catch (e) {}
+  offConversationSubscription = null
+}
+
+watch([text, atUserIds], () => {
+  queueDraftPersist()
+}, { deep: true })
 
 function onKeyboardHeightChange(res) {
   applyKeyboardHeight(res?.height)
@@ -500,34 +662,47 @@ function mediaKey(m) {
 }
 
 function mediaSrc(m) {
-  if (!m?.content) return ''
-  const key = mediaKey(m)
+  return mediaSrcAt(m, 0)
+}
+
+function mediaSrcAt(m, index) {
+  const urls = imageUrlsOf(m)
+  const path = urls[index] || m?.content
+  if (!path) return ''
+  const key = mediaKey(m) + '#' + index
   const override = mediaSrcOverride.value[key]
   if (override && override !== '__failed__') return override
-  return getDisplayUrl(m.content) || fullUrl(m.content)
+  return getDisplayUrl(path) || fullUrl(path)
 }
 
 function mediaFailed(m) {
-  return mediaSrcOverride.value[mediaKey(m)] === '__failed__'
+  return mediaSrcOverride.value[mediaKey(m) + '#0'] === '__failed__'
+    || mediaSrcOverride.value[mediaKey(m)] === '__failed__'
 }
 
 function onMediaError(m) {
-  if (!m?.content) return
-  const key = mediaKey(m)
-  const cur = mediaSrc(m)
+  onMediaErrorAt(m, 0)
+}
+
+function onMediaErrorAt(m, index) {
+  const urls = imageUrlsOf(m)
+  const path = urls[index] || m?.content
+  if (!path) return
+  const key = mediaKey(m) + '#' + index
+  const cur = mediaSrcAt(m, index)
   // 本地缓存失效：清缓存后回退完整网络 URL 再试一次
   if (isLocalMediaPath(cur)) {
-    forgetCached(m.content)
-    const remote = fullUrl(m.content)
+    forgetCached(path)
+    const remote = fullUrl(path)
     if (remote && remote !== cur) {
       mediaSrcOverride.value = { ...mediaSrcOverride.value, [key]: remote }
       return
     }
   }
   // 已是网络地址仍失败：再强制用归一化后的 fullUrl 重试一次（避免错误 host / 双斜杠）
-  const remote = fullUrl(m.content)
+  const remote = fullUrl(path)
   if (remote && remote !== cur && mediaSrcOverride.value[key] !== remote) {
-    forgetCached(m.content)
+    forgetCached(path)
     mediaSrcOverride.value = { ...mediaSrcOverride.value, [key]: remote }
     return
   }
@@ -535,13 +710,17 @@ function onMediaError(m) {
 }
 
 function retryMedia(m) {
-  if (!m?.content) return
-  const key = mediaKey(m)
-  forgetCached(m.content)
+  const urls = imageUrlsOf(m)
+  if (!urls.length && !m?.content) return
   const next = { ...mediaSrcOverride.value }
-  delete next[key]
+  const targets = urls.length ? urls : [m.content]
+  targets.forEach((path, i) => {
+    forgetCached(path)
+    delete next[mediaKey(m) + '#' + i]
+    delete next[mediaKey(m)]
+    ensureCached(path).catch(() => {})
+  })
   mediaSrcOverride.value = next
-  ensureCached(m.content).catch(() => {})
 }
 
 async function resolveChatBackground(raw) {
@@ -608,7 +787,7 @@ onLoad(async (q) => {
   title.value = decodeURIComponent(q.title || '聊天')
   chatBg.value = getBackground(conversationId.value)
   await resolveChatBackground(chatBg.value)
-  subscribeConversation(conversationId.value)
+  bindConversationSubscription()
   await loadHistory()
   const detail = await api.conversation(conversationId.value)
   members.value = detail.members || []
@@ -616,11 +795,15 @@ onLoad(async (q) => {
   ownerId.value = detail.ownerId != null ? Number(detail.ownerId) : null
   peer.value = detail.peer || null
   if (detail.title) title.value = detail.title
+  restoreAiStream(detail)
+  chatBg.value = syncBackgroundFromDetail(conversationId.value, detail)
+  await resolveChatBackground(chatBg.value)
   if (convType.value === 1 && peer.value && !peer.value.bot) {
     await loadFriendStatus()
   } else {
     isFriend.value = false
   }
+  restoreDraft(detail)
   if (messages.value.length) {
     markConversationRead(messages.value[messages.value.length - 1].id, true)
   }
@@ -636,11 +819,21 @@ onShow(async () => {
     ownerId.value = detail.ownerId != null ? Number(detail.ownerId) : null
     peer.value = detail.peer || null
     if (detail.title) title.value = detail.title
-  } catch (e) {}
-  chatBg.value = getBackground(conversationId.value)
+    restoreAiStream(detail)
+    chatBg.value = syncBackgroundFromDetail(conversationId.value, detail)
+  } catch (e) {
+    chatBg.value = getBackground(conversationId.value)
+  }
   await resolveChatBackground(chatBg.value)
+  if (!isPrivateHuman.value) {
+    clearRemoteTyping()
+  }
   if (convType.value === 1 && peer.value && !peer.value.bot) {
     await loadFriendStatus()
+  }
+  // 从「清空聊天记录」返回时，同步重拉空历史
+  if (consumeClearedFlag(conversationId.value)) {
+    await applyLocalHistoryCleared()
   }
   if (messages.value.length) {
     markConversationRead(messages.value[messages.value.length - 1].id, true)
@@ -650,11 +843,31 @@ onShow(async () => {
   }
 })
 
+onHide(() => {
+  stopTypingStatus(true)
+  clearRemoteTyping()
+})
+
 onUnload(() => {
+  stopTypingStatus(true)
+  clearRemoteTyping()
+  clearDraftPersistTimer()
+  persistDraftNow()
+  unbindConversationSubscription()
   const store = getStore()
+  // 离开前先落本地已读水位并清红点，再清 activeChatId，避免迟到 WS 把未读写回
+  const lastId = pendingReadMsgId
+    || lastMarkedMsgId
+    || (messages.value.length ? messages.value[messages.value.length - 1].id : 0)
+  if (conversationId.value && lastId) {
+    store.markConversationReadLocal(conversationId.value, lastId)
+  }
   if (store.state.activeChatId === conversationId.value) {
     store.setActiveChatId(null)
   }
+  previewEarlierLock = false
+  if (feedbackState.preview.show) closePreview()
+  else setPreviewReachEarlierHandler(null)
 })
 
 onMounted(() => {
@@ -677,7 +890,13 @@ onMounted(() => {
     handleAi(chunk)
   }))
   offs.push(onWs('typing', (p) => {
-    if (!p.typing) { typingText.value = ''; return }
+    if (Number(p?.conversationId) !== Number(conversationId.value)) return
+    if (!isPrivateHuman.value) {
+      clearRemoteTyping()
+      return
+    }
+    if (p.userId != null && Number(p.userId) === Number(myUserId.value)) return
+    if (!p.typing) { clearRemoteTyping(); return }
     const mem = findMember(p.userId)
     typingText.value = (memberDisplayName(mem) || '对方') + ' 正在输入…'
   }))
@@ -687,18 +906,42 @@ onMounted(() => {
     if (payload?.userId != null && Number(payload.userId) === Number(myId)) return
     applyRemoteReaction(payload)
   }))
+  offs.push(onWs('notify', (body) => {
+    if (!body || body.type !== 'conversation_cleared') return
+    const id = body.payload?.conversationId != null
+      ? body.payload.conversationId
+      : body.payload?.conversation?.id
+    if (Number(id) !== Number(conversationId.value)) return
+    applyLocalHistoryCleared()
+  }))
+  const onCleared = (payload) => {
+    const id = payload?.conversationId != null ? payload.conversationId : payload
+    if (Number(id) !== Number(conversationId.value)) return
+    applyLocalHistoryCleared()
+  }
+  try {
+    uni.$on('pc-conversation-cleared', onCleared)
+    offs.push(() => {
+      try { uni.$off('pc-conversation-cleared', onCleared) } catch (e) {}
+    })
+  } catch (e) {}
   // 测一次可视高度，供 nearBottom 判断
   nextTick(() => {
     uni.createSelectorQuery()
       .select('.msgs')
       .boundingClientRect((rect) => {
-        if (rect?.height) msgsViewH = rect.height
+        if (rect?.height) {
+          msgsViewH = rect.height
+        }
       })
       .exec()
   })
 })
 
 onUnmounted(() => {
+  stopTypingStatus(false)
+  clearRemoteTyping()
+  clearDraftPersistTimer()
   try {
     uni.offKeyboardHeightChange(onKeyboardHeightChange)
   } catch (e) {}
@@ -706,10 +949,13 @@ onUnmounted(() => {
   offs.forEach(fn => fn && fn())
   clearTimeout(readMarkTimer)
   clearTimeout(aiFlushTimer)
+  clearTimeout(bubbleLongPressTimer)
   aiDeltaMap = Object.create(null)
   if (pendingReadMsgId > lastMarkedMsgId && conversationId.value) {
     const msgId = pendingReadMsgId
     pendingReadMsgId = 0
+    lastMarkedMsgId = msgId
+    getStore().markConversationReadLocal(conversationId.value, msgId)
     api.markRead(conversationId.value, msgId, true).catch(() => {})
   }
   clearScrollTimers()
@@ -725,15 +971,54 @@ function clearScrollTimers() {
   scrollTimers = []
 }
 
+function clearRemoteTyping() {
+  typingText.value = ''
+}
+
+function canUseTyping() {
+  return !!conversationId.value && isPrivateHuman.value && !blockedPrivateChat.value
+}
+
+function stopTypingStatus(notifyRemote = false) {
+  clearTimeout(typingTimer)
+  typingTimer = null
+  if (notifyRemote && typingActive && canUseTyping()) {
+    sendStomp('/app/chat.typing', { conversationId: conversationId.value, typing: false })
+  }
+  typingActive = false
+}
+
+function touchTypingStatus() {
+  if (!canUseTyping()) return
+  if (!typingActive) {
+    typingActive = true
+    sendStomp('/app/chat.typing', { conversationId: conversationId.value, typing: true })
+  }
+  clearTimeout(typingTimer)
+  typingTimer = setTimeout(() => {
+    if (!typingActive || !canUseTyping()) {
+      typingActive = false
+      typingTimer = null
+      return
+    }
+    typingActive = false
+    typingTimer = null
+    sendStomp('/app/chat.typing', { conversationId: conversationId.value, typing: false })
+  }, 1200)
+}
+
 /** 标记当前会话已读；WebSocket 高频消息时合并请求 */
 function markConversationRead(lastMsgId, immediate = false) {
   if (!conversationId.value || !lastMsgId) return
   pendingReadMsgId = Math.max(pendingReadMsgId, lastMsgId)
+  // 先乐观清红点，避免 AI/@ 消息的 conversation_updated 把未读写进列表
+  getStore().markConversationReadLocal(conversationId.value, pendingReadMsgId)
   const flush = async () => {
     const msgId = pendingReadMsgId
     pendingReadMsgId = 0
     if (!msgId || msgId <= lastMarkedMsgId) return
     lastMarkedMsgId = msgId
+    getStore().markConversationReadLocal(conversationId.value, msgId)
     try {
       await api.markRead(conversationId.value, msgId, true)
     } catch (e) {}
@@ -747,12 +1032,30 @@ function markConversationRead(lastMsgId, immediate = false) {
 }
 
 function onScroll(e) {
+  cancelBubbleLongPress(true)
+  if (menuMsg.value) closeMsgMenu()
   const d = e?.detail || {}
   const top = Number(d.scrollTop) || 0
   const contentH = Number(d.scrollHeight) || 0
+  currentScrollTop = top
   if (msgsViewH > 0 && contentH > 0) {
     nearBottom = top + msgsViewH >= contentH - NEAR_BOTTOM_PX
   }
+  // 距顶一定距离即预取，不必等顶到头
+  if (top <= LOAD_MORE_THRESHOLD) {
+    loadMore()
+  }
+}
+
+function measureMsgsInnerHeight() {
+  return new Promise((resolve) => {
+    uni.createSelectorQuery()
+      .select('.msgs-inner')
+      .boundingClientRect()
+      .exec((res) => {
+        resolve(Number(res?.[0]?.height) || 0)
+      })
+  })
 }
 
 /**
@@ -782,6 +1085,7 @@ function scrollToBottom(animated = false, settle = false) {
           msgsViewH = view.height || msgsViewH
           const maxTop = Math.max(0, (inner.height || 0) - (view.height || 0))
           scrollTop.value = scrollTop.value === maxTop ? maxTop + 0.1 : maxTop
+          currentScrollTop = maxTop
           nearBottom = true
         })
     })
@@ -809,20 +1113,110 @@ function scrollToBottomLite() {
 
 async function loadHistory(beforeId) {
   const list = await api.messages(conversationId.value, beforeId)
+  const rows = (list || []).map((msg) => normalizeMsg(msg))
   if (!beforeId) {
-    messages.value = list || []
+    messages.value = rows
+    hasMoreHistory.value = rows.length >= HISTORY_PAGE_SIZE
     // 首次加载：无动画 + 多次 settle，展示最新消息
     scrollToBottom(false, true)
+    // 首屏内容较矮时静默补拉，避免一上滑就顶到头
+    if (hasMoreHistory.value) {
+      setTimeout(() => {
+        if (currentScrollTop <= LOAD_MORE_THRESHOLD) loadMore()
+      }, 320)
+    }
   } else {
     // 上拉加载更早消息：保持当前位置，不强制贴底
-    messages.value = [...(list || []), ...messages.value]
+    messages.value = [...rows, ...messages.value]
+    if (!rows.length || rows.length < HISTORY_PAGE_SIZE) {
+      hasMoreHistory.value = false
+    }
   }
-  prefetchAll((list || []).filter(m => (m.msgType === 2 || m.msgType === MSG_EMOJI) && m.content).map(m => m.content))
+  prefetchAll(rows.flatMap((m) => mediaPrefetchTargets(m)))
+  return rows
 }
 
+function consumeClearedFlag(convId) {
+  if (convId == null) return false
+  const key = 'pc_cleared_conv_' + convId
+  try {
+    const ts = uni.getStorageSync(key)
+    if (!ts) return false
+    uni.removeStorageSync(key)
+    return true
+  } catch (e) {
+    return false
+  }
+}
+
+/** 云端已清空后，同步本页消息列表与 AI 流式中间态 */
+async function applyLocalHistoryCleared() {
+  messages.value = []
+  hasMoreHistory.value = false
+  typingText.value = ''
+  aiDeltaMap = Object.create(null)
+  clearTimeout(aiFlushTimer)
+  try {
+    await loadHistory()
+  } catch (e) {
+    messages.value = []
+    hasMoreHistory.value = false
+  }
+}
+
+/**
+ * 拉取更早一页历史并还原滚动位置（列表上滑与预览边界加载共用）。
+ * @returns {Promise<Array>} 本页消息（升序），失败或无更多时返回 []
+ */
+async function fetchEarlierHistoryPage() {
+  if (loadMoreLock || loadingMore.value || !hasMoreHistory.value || !messages.value.length) {
+    return []
+  }
+  loadMoreLock = true
+  const beforeH = await measureMsgsInnerHeight()
+  loadingMore.value = true
+  let rows = []
+  try {
+    rows = await loadHistory(messages.value[0].id)
+  } catch (e) {
+    rows = []
+  } finally {
+    loadingMore.value = false
+  }
+  if (!rows.length) {
+    setTimeout(() => { loadMoreLock = false }, 48)
+    return []
+  }
+  await nextTick()
+  await new Promise((r) => setTimeout(r, 16))
+  if (nearBottom) {
+    // 首屏补拉 / 底部预取：保持贴底，勿用高度差把视口拽走
+    scrollToBottom(false, true)
+  } else {
+    const afterH = await measureMsgsInnerHeight()
+    const delta = Math.max(0, afterH - beforeH)
+    if (delta > 0) {
+      scrollAnim.value = false
+      scrollInto.value = ''
+      const nextTop = currentScrollTop + delta
+      scrollTop.value = scrollTop.value === nextTop ? nextTop + 0.01 : nextTop
+      currentScrollTop = nextTop
+    }
+  }
+  setTimeout(() => { loadMoreLock = false }, 48)
+  return rows
+}
+
+/**
+ * 预取更早消息，并按内容高度差还原滚动位置，避免上滑跳动。
+ */
 async function loadMore() {
-  if (!messages.value.length) return
-  await loadHistory(messages.value[0].id)
+  const rows = await fetchEarlierHistoryPage()
+  if (!rows.length) return
+  // 仍靠近顶部则继续预取，填满可视区域（底部补拉走 nearBottom 分支）
+  if (!nearBottom && currentScrollTop <= LOAD_MORE_THRESHOLD && hasMoreHistory.value) {
+    setTimeout(() => loadMore(), 64)
+  }
 }
 
 function findMember(userId) {
@@ -833,6 +1227,11 @@ function findMember(userId) {
 function memberDisplayName(mem) {
   if (!mem) return ''
   return (mem.remark || mem.nickname || '').trim()
+}
+
+function memberMentionName(mem) {
+  if (!mem) return ''
+  return (mem.nickname || mem.remark || '').trim()
 }
 
 function senderNickname(m) {
@@ -847,6 +1246,81 @@ function senderNickname(m) {
   if (m.sender?.nickname) return m.sender.nickname
   if (m.msgType === 5 || Number(m.senderId) === 1) return 'Kimi'
   return '用户'
+}
+
+function senderMentionName(m) {
+  if (!m) return ''
+  if (!isGroupChat.value && peer.value && Number(m.senderId) === Number(peer.value.id)) {
+    if (peer.value.nickname) return String(peer.value.nickname).trim()
+  }
+  const mem = findMember(m.senderId)
+  const fromMem = memberMentionName(mem)
+  if (fromMem) return fromMem
+  if (m.sender?.nickname) return String(m.sender.nickname).trim()
+  if (m.msgType === 5 || Number(m.senderId) === 1) return 'Kimi'
+  return '用户'
+}
+
+function insertMention(name, userId) {
+  const display = String(name || '').trim()
+  if (!display) return
+  const pos = cursor.value >= 0 ? cursor.value : text.value.length
+  const before = text.value.slice(0, pos)
+  const after = text.value.slice(pos)
+  const token = '@' + display
+  const beforeTrimmed = before.replace(/\s+$/, '')
+  const afterTrimmed = after.replace(/^\s+/, '')
+  if (beforeTrimmed.endsWith(token) && (!afterTrimmed || afterTrimmed.startsWith(token))) {
+    cursor.value = before.length
+    showAt.value = false
+    return
+  }
+  const prefix = before && !/[\s\n]$/.test(before) ? ' ' : ''
+  const suffix = !after || /^[\s\n]/.test(after) ? '' : ' '
+  const insertText = prefix + token + ' ' + suffix
+  text.value = before + insertText + after
+  cursor.value = (before + insertText).length
+  if (userId != null) {
+    atUserIds.value = Array.from(new Set([...atUserIds.value, Number(userId)]))
+  }
+  showAt.value = false
+}
+
+function openSelfProfile() {
+  uni.switchTab({ url: '/pages/mine/mine' })
+}
+
+function openSenderProfile(m) {
+  if (!m) return
+  const senderId = Number(m.senderId)
+  if (!senderId) return
+  if (myUserId.value != null && senderId === Number(myUserId.value)) {
+    openSelfProfile()
+    return
+  }
+  if (isBotSender(m)) {
+    uni.showToast({ title: 'AI 助手暂无个人资料', icon: 'none' })
+    return
+  }
+  const name = senderNickname(m) || '用户'
+  const url = '/pages/friend-profile/friend-profile?userId=' + senderId
+    + '&convId=' + conversationId.value
+    + '&title=' + encodeURIComponent(name)
+  uni.navigateTo({ url })
+}
+
+function mentionSender(m) {
+  if (!m) return
+  const senderId = Number(m.senderId)
+  if (myUserId.value != null && senderId === Number(myUserId.value)) {
+    uni.showToast({ title: '不能 @ 自己', icon: 'none' })
+    return
+  }
+  closeMsgMenu()
+  closeEmojiPanel()
+  closeStickerPanel()
+  voiceMode.value = false
+  insertMention(senderMentionName(m), senderId)
 }
 
 function senderAvatar(m) {
@@ -925,11 +1399,11 @@ function formatMsgTime(t) {
 
 function upsertMsg(msg) {
   const myId = getStore().state.user?.id
-  msg.mine = msg.senderId === myId
+  msg = normalizeMsg({ ...msg, mine: msg.senderId === myId })
   if (msg.clientMsgId && streamingMap.value[msg.clientMsgId]) {
     const idx = messages.value.findIndex(m => m.clientMsgId === msg.clientMsgId)
     if (idx >= 0) {
-      messages.value[idx] = { ...messages.value[idx], ...msg, streaming: false }
+      messages.value[idx] = normalizeMsg({ ...messages.value[idx], ...msg, streaming: false })
       delete streamingMap.value[msg.clientMsgId]
       return
     }
@@ -937,11 +1411,11 @@ function upsertMsg(msg) {
   const existIdx = messages.value.findIndex(m => m.id === msg.id)
   if (existIdx >= 0) {
     // 原地更新，避免整表 map 重建
-    messages.value[existIdx] = { ...messages.value[existIdx], ...msg }
+    messages.value[existIdx] = normalizeMsg({ ...messages.value[existIdx], ...msg })
     return
   }
   messages.value.push(msg)
-  if ((msg.msgType === 2 || msg.msgType === MSG_EMOJI) && msg.content) prefetchAll([msg.content])
+  prefetchAll(mediaPrefetchTargets(msg))
 }
 
 function flushAiDeltas() {
@@ -965,20 +1439,104 @@ function flushAiDeltas() {
   }
 }
 
-function handleAi(chunk) {
-  if (chunk.type === 'start') {
-    streamingMap.value[chunk.clientMsgId] = true
+/** 根据会话详情中的 AI 流式状态恢复等待气泡（退出重进仍可见） */
+function restoreAiStream(detail) {
+  if (!detail?.aiStreaming) {
+    const staleIdx = messages.value.findIndex(m => m.streaming && !m.id && Number(m.senderId) === 1)
+    if (staleIdx < 0) return
+    const id = messages.value[staleIdx].clientMsgId
+    if (id) delete streamingMap.value[id]
+    messages.value.splice(staleIdx, 1)
+    // 等待期间若漏掉 done/正式消息，补拉最新历史
+    syncLatestAfterAiDone()
+    return
+  }
+  const clientMsgId = detail.aiStreamClientMsgId || ('ai-pending-' + conversationId.value)
+  const content = detail.aiStreamContent || ''
+  const existIdx = messages.value.findIndex(m =>
+    (m.clientMsgId && m.clientMsgId === clientMsgId)
+    || (m.streaming && Number(m.senderId) === 1 && !m.id)
+  )
+  if (existIdx >= 0) {
+    const oldId = messages.value[existIdx].clientMsgId
+    if (oldId && oldId !== clientMsgId) delete streamingMap.value[oldId]
+    streamingMap.value[clientMsgId] = true
+    messages.value[existIdx] = {
+      ...messages.value[existIdx],
+      clientMsgId,
+      content: content || messages.value[existIdx].content || '',
+      streaming: true,
+      senderId: 1,
+      msgType: 5,
+      mine: false
+    }
+  } else {
+    streamingMap.value[clientMsgId] = true
     messages.value.push({
-      clientMsgId: chunk.clientMsgId,
+      clientMsgId,
       conversationId: conversationId.value,
       senderId: 1,
       msgType: 5,
-      content: '',
+      content,
       mine: false,
       streaming: true
     })
+  }
+  if (nearBottom) scrollToBottomLite()
+}
+
+async function syncLatestAfterAiDone() {
+  if (!conversationId.value) return
+  try {
+    const list = await api.messages(conversationId.value)
+    const rows = list || []
+    for (const msg of rows) {
+      upsertMsg(msg)
+    }
+    if (nearBottom) scrollToBottomLite()
+  } catch (e) {}
+}
+
+function ensureAiStreamingBubble(clientMsgId, content) {
+  if (!clientMsgId) return -1
+  let idx = messages.value.findIndex(m => m.clientMsgId === clientMsgId)
+  if (idx >= 0) return idx
+  // 排队占位气泡 → 换成真实 clientMsgId
+  idx = messages.value.findIndex(m =>
+    m.streaming && Number(m.senderId) === 1 && !m.id
+    && String(m.clientMsgId || '').startsWith('ai-pending-')
+  )
+  if (idx >= 0) {
+    const oldId = messages.value[idx].clientMsgId
+    if (oldId) delete streamingMap.value[oldId]
+    streamingMap.value[clientMsgId] = true
+    messages.value[idx] = {
+      ...messages.value[idx],
+      clientMsgId,
+      content: content != null ? content : (messages.value[idx].content || ''),
+      streaming: true
+    }
+    return idx
+  }
+  streamingMap.value[clientMsgId] = true
+  messages.value.push({
+    clientMsgId,
+    conversationId: conversationId.value,
+    senderId: 1,
+    msgType: 5,
+    content: content || '',
+    mine: false,
+    streaming: true
+  })
+  return messages.value.length - 1
+}
+
+function handleAi(chunk) {
+  if (chunk.type === 'start') {
+    ensureAiStreamingBubble(chunk.clientMsgId, '')
     if (nearBottom) scrollToBottomLite()
   } else if (chunk.type === 'delta') {
+    ensureAiStreamingBubble(chunk.clientMsgId, chunk.content)
     aiDeltaMap[chunk.clientMsgId] = chunk.content
     if (!aiFlushTimer) {
       aiFlushTimer = setTimeout(flushAiDeltas, 64)
@@ -988,10 +1546,11 @@ function handleAi(chunk) {
       clearTimeout(aiFlushTimer)
       flushAiDeltas()
     }
-    const idx = messages.value.findIndex(m => m.clientMsgId === chunk.clientMsgId)
+    const idx = ensureAiStreamingBubble(chunk.clientMsgId, chunk.content)
     if (idx >= 0) {
       messages.value[idx].content = chunk.content
       messages.value[idx].streaming = false
+      // 保留 streamingMap，等正式消息 upsert 时合并并清理，避免重复气泡
       if (nearBottom) scrollToBottomLite()
     }
   }
@@ -999,7 +1558,16 @@ function handleAi(chunk) {
 
 async function send() {
   const content = text.value.trim()
-  if (!content) return
+  const staged = stagedImages.value
+  if (!content && !staged.length) return
+  stopTypingStatus(true)
+  if (staged.length) {
+    await sendStagedImages()
+    return
+  }
+  const textSnapshot = text.value
+  const atSnap = atUserIds.value.slice()
+  const replySnap = replyTarget.value
   const payload = {
     conversationId: conversationId.value,
     content,
@@ -1012,8 +1580,8 @@ async function send() {
   text.value = ''
   cursor.value = -1
   atUserIds.value = []
-  inputLineCount.value = 1
-  atMaxHeight.value = false
+  syncComposerMetrics('')
+  queueDraftPersist(0)
   showAt.value = false
   clearReply()
   closeEmojiPanel()
@@ -1025,7 +1593,75 @@ async function send() {
     upsertMsg(msg)
     scrollToBottom(true)
   } catch (e) {
+    text.value = textSnapshot
+    atUserIds.value = atSnap
+    cursor.value = textSnapshot.length
+    syncComposerMetrics(textSnapshot)
+    if (replySnap) replyTarget.value = replySnap
     showSendError(e)
+  }
+}
+
+async function sendStagedImages() {
+  stopTypingStatus(true)
+  const items = stagedImages.value.slice()
+  const paths = items.map((x) => x.localPath)
+  const caption = text.value.trim()
+  const atIds = caption ? resolveAtUserIds(caption) : undefined
+  const base = {}
+  if (caption) base.caption = caption
+  const snapshot = items
+  const textSnapshot = text.value
+  const atSnap = atUserIds.value.slice()
+  const replySnap = replyTarget.value
+  stagedImages.value = []
+  text.value = ''
+  cursor.value = -1
+  atUserIds.value = []
+  syncComposerMetrics('')
+  queueDraftPersist(0)
+  showAt.value = false
+  clearReply()
+  closeEmojiPanel()
+  sendPulse.value = true
+  setTimeout(() => { sendPulse.value = false }, 280)
+  uni.showLoading({ title: paths.length > 1 ? `上传 ${paths.length} 张…` : '发送中…', mask: true })
+  try {
+    const ups = await Promise.all(paths.map((p) => api.upload(p)))
+    const urls = []
+    for (let i = 0; i < ups.length; i++) {
+      const up = ups[i]
+      if (!up?.url) throw new Error('上传成功但未返回图片地址')
+      urls.push(up.url)
+      try {
+        await cacheLocalAs(up.url, paths[i])
+      } catch (e) {}
+    }
+    if (urls.length > 1) base.images = urls
+    const extraJson = replySnap?.msg
+      ? buildReplyExtra(replySnap.msg, replySnap.name, base)
+      : (Object.keys(base).length ? stringifyExtra(base) : undefined)
+    const payload = {
+      conversationId: conversationId.value,
+      content: urls[0],
+      msgType: 2
+    }
+    if (extraJson) payload.extraJson = extraJson
+    if (atIds) payload.atUserIds = atIds
+    uni.vibrateShort && uni.vibrateShort({})
+    const msg = await api.sendMessage(payload)
+    upsertMsg(msg)
+    scrollToBottom(true)
+  } catch (e) {
+    stagedImages.value = snapshot
+    text.value = textSnapshot
+    cursor.value = textSnapshot.length
+    atUserIds.value = atSnap
+    syncComposerMetrics(textSnapshot)
+    if (replySnap) replyTarget.value = replySnap
+    showSendError(e)
+  } finally {
+    uni.hideLoading()
   }
 }
 
@@ -1035,16 +1671,11 @@ function onTextInput(e) {
   if (text.value.split('\n').length >= INPUT_MAX_LINES) {
     atMaxHeight.value = true
   }
-  // 输入状态只发一次 start，避免每个按键打 WS
-  if (!typingActive) {
-    typingActive = true
-    sendStomp('/app/chat.typing', { conversationId: conversationId.value, typing: true })
+  if (!text.value.trim()) {
+    stopTypingStatus(true)
+    return
   }
-  clearTimeout(typingTimer)
-  typingTimer = setTimeout(() => {
-    typingActive = false
-    sendStomp('/app/chat.typing', { conversationId: conversationId.value, typing: false })
-  }, 1200)
+  touchTypingStatus()
 }
 
 function onLineChange(e) {
@@ -1073,8 +1704,7 @@ function confirmEditor() {
   cursor.value = editorText.value.length
   closeEditor()
   nextTick(() => {
-    inputLineCount.value = Math.max(1, editorText.value.split('\n').length)
-    atMaxHeight.value = inputLineCount.value >= INPUT_MAX_LINES
+    syncComposerMetrics(editorText.value)
   })
 }
 
@@ -1310,11 +1940,7 @@ function insertEmoji(emoji) {
   const pos = cursor.value >= 0 ? cursor.value : text.value.length
   text.value = text.value.slice(0, pos) + emoji + text.value.slice(pos)
   cursor.value = pos + emoji.length
-  sendStomp('/app/chat.typing', { conversationId: conversationId.value, typing: true })
-  clearTimeout(typingTimer)
-  typingTimer = setTimeout(() => {
-    sendStomp('/app/chat.typing', { conversationId: conversationId.value, typing: false })
-  }, 1200)
+  touchTypingStatus()
 }
 
 function toggleAt() {
@@ -1326,9 +1952,7 @@ function toggleAt() {
   }
 }
 function pickAt(mem) {
-  atUserIds.value = Array.from(new Set([...atUserIds.value, mem.userId]))
-  text.value += '@' + (memberDisplayName(mem) || mem.nickname || '用户') + ' '
-  showAt.value = false
+  insertMention(memberMentionName(mem) || '用户', mem.userId)
 }
 
 async function addBot() {
@@ -1348,7 +1972,7 @@ function resolveAtUserIds(content) {
   const text = content || ''
   const kept = atUserIds.value.filter((uid) => {
     const mem = members.value.find((m) => Number(m.userId) === Number(uid))
-    const name = memberDisplayName(mem) || mem?.nickname || ''
+    const name = memberMentionName(mem) || ''
     if (name && text.includes('@' + name)) return true
     // 兼容手打 @Kimi / @Kimi助手
     if (Number(uid) === 1 && (/@Kimi\b/i.test(text) || text.includes('@Kimi助手') || text.includes('@机器人'))) {
@@ -1361,44 +1985,313 @@ function resolveAtUserIds(content) {
 
 function pickImage() {
   closeEmojiPanel()
+  const remain = STAGE_IMAGE_MAX - stagedImages.value.length
+  if (remain <= 0) {
+    uni.showToast({ title: `最多选择 ${STAGE_IMAGE_MAX} 张`, icon: 'none' })
+    return
+  }
   uni.chooseImage({
-    count: 1,
-    success: async (res) => {
-      const file = res.tempFilePaths[0]
-      try {
-        const up = await api.upload(file)
-        if (!up?.url) {
-          throw new Error('上传成功但未返回图片地址')
-        }
-        try {
-          await cacheLocalAs(up.url, file)
-        } catch (e) {}
-        const payload = {
-          conversationId: conversationId.value,
-          content: up.url,
-          msgType: 2
-        }
-        if (replyTarget.value?.msg) {
-          payload.extraJson = buildReplyExtra(replyTarget.value.msg, replyTarget.value.name)
-        }
-        const msg = await api.sendMessage(payload)
-        clearReply()
-        upsertMsg(msg)
-        scrollToBottom(true)
-      } catch (e) {
-        showSendError(e)
-      }
+    count: remain,
+    success: (res) => {
+      const files = res.tempFilePaths || []
+      if (!files.length) return
+      voiceMode.value = false
+      const next = stagedImages.value.slice()
+      files.forEach((file) => {
+        if (next.length >= STAGE_IMAGE_MAX) return
+        stagedImageSeq += 1
+        next.push({ id: 's' + stagedImageSeq, localPath: file })
+      })
+      stagedImages.value = next
     }
   })
 }
 
-function preview(path) {
-  const url = getDisplayUrl(path) || fullUrl(path)
-  if (!url) {
+function removeStagedImage(idx) {
+  const next = stagedImages.value.slice()
+  next.splice(idx, 1)
+  stagedImages.value = next
+}
+
+function clearStagedImages() {
+  stagedImages.value = []
+}
+
+function imageCaption(m) {
+  return m?.__imageCaption || getCaption(m)
+}
+
+function imageUrlsOf(m) {
+  return Array.isArray(m?.__imageUrls) ? m.__imageUrls : getImageUrls(m)
+}
+
+function normalizeMsg(msg) {
+  if (!msg || typeof msg !== 'object') return msg
+  const imageUrls = getImageUrls(msg)
+  const imageCaption = getCaption(msg)
+  return {
+    ...msg,
+    __imageUrls: imageUrls,
+    __imageCount: imageUrls.length,
+    __imageCaption: imageCaption
+  }
+}
+
+function mediaPrefetchTargets(msg) {
+  if (!msg) return []
+  if (msg.msgType === 2) return imageUrlsOf(msg)
+  if (msg.msgType === MSG_EMOJI && msg.content) return [msg.content]
+  return []
+}
+
+/** 可进入聊天图片/表情包相册的消息 */
+function isAlbumMsg(msg) {
+  return !!msg && (msg.msgType === 2 || msg.msgType === MSG_EMOJI)
+}
+
+/** 相册用 URL：普通图走 images/content，表情包走 content */
+function albumUrlsOf(msg) {
+  if (!msg) return []
+  if (msg.msgType === MSG_EMOJI) {
+    const s = msg.content == null ? '' : String(msg.content).trim()
+    return s ? [s] : []
+  }
+  if (msg.msgType === 2) return imageUrlsOf(msg)
+  return []
+}
+
+/**
+ * 从消息列表提取图片/表情包相册项（按消息时间顺序）。
+ * 顺序：消息时间/id 升序，同条多图按 images 顺序。
+ */
+function extractChatImageAlbum(msgList) {
+  const sources = []
+  const displays = []
+  const items = []
+  const keys = new Set()
+  const list = Array.isArray(msgList) ? msgList : []
+  for (const msg of list) {
+    if (!isAlbumMsg(msg)) continue
+    const urls = albumUrlsOf(msg)
+    for (let ii = 0; ii < urls.length; ii++) {
+      const src = urls[ii]
+      if (!src) continue
+      const display = getDisplayUrl(src) || fullUrl(src)
+      if (!display) continue
+      const key = `${msg.id != null ? msg.id : 'x'}:${ii}:${src}`
+      if (keys.has(key)) continue
+      keys.add(key)
+      sources.push(src)
+      displays.push(display)
+      items.push({
+        messageId: msg.id != null ? msg.id : null,
+        msgType: msg.msgType,
+        imageIndex: ii,
+        sourceUrl: src
+      })
+    }
+  }
+  return { sources, displays, keys: Array.from(keys), items }
+}
+
+/** 收集当前已加载消息中的全部图片/表情包（按消息时间顺序），供预览左右滑动 */
+function collectLoadedChatImages(focusMsg, focusIndex = 0) {
+  const { sources, displays, items } = extractChatImageAlbum(messages.value)
+  let current = 0
+  let found = false
+
+  if (focusMsg && isAlbumMsg(focusMsg)) {
+    const list = albumUrlsOf(focusMsg)
+    const safeIndex = Math.min(Math.max(0, focusIndex), Math.max(0, list.length - 1))
+    const focusSrc = list[safeIndex]
+    const focusDisplay = focusSrc ? (getDisplayUrl(focusSrc) || fullUrl(focusSrc)) : ''
+    // 优先按「消息引用 + 图序」定位，避免同 URL 多条消息时指错
+    let walk = 0
+    for (const msg of messages.value) {
+      if (!isAlbumMsg(msg)) continue
+      const urls = albumUrlsOf(msg)
+      for (let ii = 0; ii < urls.length; ii++) {
+        const src = urls[ii]
+        if (!src) continue
+        const display = getDisplayUrl(src) || fullUrl(src)
+        if (!display) continue
+        if (msg === focusMsg && ii === safeIndex) {
+          current = walk
+          found = true
+          break
+        }
+        walk++
+      }
+      if (found) break
+    }
+    if (!found && focusSrc) {
+      const idx = sources.findIndex((u, i) => u === focusSrc || displays[i] === focusDisplay)
+      if (idx >= 0) {
+        current = idx
+        found = true
+      } else if (focusDisplay) {
+        sources.push(focusSrc)
+        displays.push(focusDisplay)
+        items.push({
+          messageId: focusMsg.id != null ? focusMsg.id : null,
+          msgType: focusMsg.msgType,
+          imageIndex: safeIndex,
+          sourceUrl: focusSrc
+        })
+        current = sources.length - 1
+        found = true
+      }
+    }
+  }
+
+  return { sources, displays, items, current }
+}
+
+/**
+ * 预览滑到相册头部附近：继续拉历史，把更早图片/表情包插入 urls 头部并校正 current。
+ * 连续纯文本页会多翻几页，直到出现图片或没有更早消息。
+ */
+async function loadEarlierPreviewImages() {
+  if (previewEarlierLock) return
+  if (!feedbackState.preview.show) return
+  if (!hasMoreHistory.value) {
+    updatePreviewAlbum({ hasMoreEarlier: false, loadingEarlier: false })
+    return
+  }
+  previewEarlierLock = true
+  updatePreviewAlbum({ loadingEarlier: true, hasMoreEarlier: true })
+
+  const focusSource = feedbackState.preview.sourceUrls[feedbackState.preview.current] || ''
+  const focusDisplay = feedbackState.preview.urls[feedbackState.preview.current] || ''
+  let gotImages = 0
+  let guard = 0
+  const MAX_EMPTY_PAGES = 8
+
+  try {
+    while (feedbackState.preview.show && hasMoreHistory.value && gotImages === 0 && guard < MAX_EMPTY_PAGES) {
+      guard++
+      // 等待列表侧 loadMore 释放锁
+      let wait = 0
+      while ((loadMoreLock || loadingMore.value) && wait < 40) {
+        await new Promise((r) => setTimeout(r, 50))
+        wait++
+      }
+      if (!feedbackState.preview.show) break
+      const rows = await fetchEarlierHistoryPage()
+      if (!rows.length) break
+      const album = extractChatImageAlbum(rows)
+      gotImages = album.displays.length
+    }
+
+    if (!feedbackState.preview.show) return
+
+    const { sources, displays, items } = extractChatImageAlbum(messages.value)
+    if (!displays.length) {
+      updatePreviewAlbum({
+        hasMoreEarlier: hasMoreHistory.value,
+        loadingEarlier: false
+      })
+      return
+    }
+
+    // 以加载结束时用户正在看的图为准（加载中可能已左右滑）
+    const liveIdx = feedbackState.preview.current
+    const liveItem = Array.isArray(feedbackState.preview.items)
+      ? feedbackState.preview.items[liveIdx]
+      : null
+    const liveSource = feedbackState.preview.sourceUrls[liveIdx] || focusSource
+    const liveDisplay = feedbackState.preview.urls[liveIdx] || focusDisplay
+    let current = liveIdx
+
+    // 优先按消息引用定位，避免同 URL / 加载中滑动导致指错页
+    if (liveItem && liveItem.messageId != null) {
+      const byMsg = items.findIndex((it) =>
+        it
+        && Number(it.messageId) === Number(liveItem.messageId)
+        && Number(it.imageIndex || 0) === Number(liveItem.imageIndex || 0)
+      )
+      if (byMsg >= 0) current = byMsg
+      else {
+        const idx = sources.findIndex((s, i) =>
+          (liveSource && s === liveSource) || (liveDisplay && displays[i] === liveDisplay)
+        )
+        if (idx >= 0) current = idx
+      }
+    } else {
+      const idx = sources.findIndex((s, i) =>
+        (liveSource && s === liveSource) || (liveDisplay && displays[i] === liveDisplay)
+      )
+      if (idx >= 0) current = idx
+      else {
+        const fb = sources.findIndex((s, i) =>
+          (focusSource && s === focusSource) || (focusDisplay && displays[i] === focusDisplay)
+        )
+        if (fb >= 0) current = fb
+      }
+    }
+
+    updatePreviewAlbum({
+      urls: displays,
+      sourceUrls: sources,
+      items,
+      current,
+      hasMoreEarlier: hasMoreHistory.value,
+      loadingEarlier: false
+    })
+
+    // 本轮成功扩到了更早图片，且仍靠近头部：稍后再填缓冲，避开 swiper 同步/快滑窗口
+    if (gotImages > 0 && current <= 1 && hasMoreHistory.value) {
+      setTimeout(() => {
+        if (feedbackState.preview.show && feedbackState.preview.current <= 1) {
+          loadEarlierPreviewImages()
+        }
+      }, 480)
+    }
+  } catch (e) {
+    updatePreviewAlbum({ loadingEarlier: false, hasMoreEarlier: hasMoreHistory.value })
+    uni.showToast({ title: e?.message || '加载更多图片失败', icon: 'none' })
+  } finally {
+    previewEarlierLock = false
+  }
+}
+
+/** 预览长按「转发」：关闭预览后走现有转发选会话流程 */
+function onPreviewForward(item) {
+  closePreview()
+  let msg = null
+  if (item?.messageId != null) {
+    msg = messages.value.find((m) => Number(m.id) === Number(item.messageId)) || null
+  }
+  if (!msg && item?.sourceUrl) {
+    msg = {
+      id: item.messageId,
+      content: item.sourceUrl,
+      msgType: item.msgType === MSG_EMOJI ? MSG_EMOJI : 2
+    }
+  }
+  if (!msg) {
+    uni.showToast({ title: '无法转发', icon: 'none' })
+    return
+  }
+  nextTick(() => openForward(msg))
+}
+
+function previewImages(m, index = 0) {
+  const { sources, displays, items, current } = collectLoadedChatImages(m, index)
+  if (!displays.length) {
     uni.showToast({ title: '图片地址无效', icon: 'none' })
     return
   }
-  uni.previewImage({ urls: [url] })
+  setPreviewReachEarlierHandler(loadEarlierPreviewImages)
+  uni.previewImage({
+    urls: displays,
+    current,
+    sourceUrls: sources,
+    items,
+    hasMoreEarlier: hasMoreHistory.value,
+    onReachEarlier: loadEarlierPreviewImages,
+    onForward: onPreviewForward
+  })
 }
 
 function replyOf(m) {
@@ -1417,6 +2310,17 @@ function clearReply() {
 function closeMsgMenu() {
   menuMsg.value = null
   menuAnchor.value = null
+  menuStickerUrl.value = null
+}
+
+/**
+ * 长按菜单展开期间，任何未在弹窗内部被拦截（.stop）的触摸都会冒泡到页面根节点。
+ * 这里统一收口：无论是点击还是滑动的起始触摸，只要落在弹窗以外，一律关闭菜单，
+ * 并且不调用 preventDefault/stopPropagation，底层元素（消息列表、导航栏等）
+ * 仍会正常收到这次触摸，从而自然衔接后续的滑动或点击行为。
+ */
+function onOutsideMenuTouch() {
+  if (menuMsg.value) closeMsgMenu()
 }
 
 const menuActions = computed(() => {
@@ -1429,7 +2333,10 @@ const menuActions = computed(() => {
     { key: 'delete', label: '删除', icon: '⌫', danger: true }
   ]
   // 图片 / 表情包消息：可加入我的表情包
-  if ((m.msgType === 2 || m.msgType === MSG_EMOJI) && m.content) {
+  const canAddSticker = m.msgType === MSG_EMOJI
+    ? !!m.content
+    : m.msgType === 2 && imageUrlsOf(m).length > 0
+  if (canAddSticker) {
     list.splice(2, 0, { key: 'addSticker', label: '添加表情', icon: '☆' })
   }
   if (m.mine && m.id && m.msgType !== 4) {
@@ -1439,14 +2346,112 @@ const menuActions = computed(() => {
   return list
 })
 
-function onMsgLong(m) {
+function pickTouchPoint(e) {
+  const t = e?.changedTouches?.[0] || e?.touches?.[0] || null
+  if (!t) return null
+  const x = t.clientX ?? t.pageX
+  const y = t.clientY ?? t.pageY
+  if (x == null || y == null) return null
+  return { x: Number(x), y: Number(y) }
+}
+
+function clearBubbleLongPressTimer() {
+  if (!bubbleLongPressTimer) return
+  clearTimeout(bubbleLongPressTimer)
+  bubbleLongPressTimer = null
+}
+
+function cancelBubbleLongPress(markMoved = false) {
+  clearBubbleLongPressTimer()
+  if (markMoved) bubblePressState.moved = true
+  bubblePressState.active = false
+  bubblePressState.msg = null
+}
+
+function onBubbleTouchStart(m, e) {
+  const p = pickTouchPoint(e)
+  if (p) lastBubbleTouch.value = p
+  if (!m || m.msgType === 4 || m.streaming) return
+  clearBubbleLongPressTimer()
+  bubblePressState.active = true
+  bubblePressState.moved = false
+  bubblePressState.fired = false
+  bubblePressState.msg = m
+  bubblePressState.startX = p?.x ?? 0
+  bubblePressState.startY = p?.y ?? 0
+  bubbleLongPressTimer = setTimeout(() => {
+    if (!bubblePressState.active || bubblePressState.moved || bubblePressState.fired || !bubblePressState.msg) {
+      return
+    }
+    bubblePressState.fired = true
+    bubblePressState.active = false
+    const target = bubblePressState.msg
+    bubblePressState.msg = null
+    onMsgLong(target, e)
+  }, LONG_PRESS_DELAY_MS)
+}
+
+function onBubbleTouchMove(e) {
+  if (!bubblePressState.active) return
+  const p = pickTouchPoint(e)
+  if (p) lastBubbleTouch.value = p
+  const dx = Math.abs((p?.x ?? bubblePressState.startX) - bubblePressState.startX)
+  const dy = Math.abs((p?.y ?? bubblePressState.startY) - bubblePressState.startY)
+  if (dx >= LONG_PRESS_MOVE_PX || dy >= LONG_PRESS_MOVE_PX) {
+    cancelBubbleLongPress(true)
+  }
+}
+
+function onBubbleTouchEnd() {
+  cancelBubbleLongPress(false)
+}
+
+function onBubbleTouchCancel() {
+  cancelBubbleLongPress(true)
+}
+
+function rectContains(rect, x, y) {
+  if (!rect) return false
+  const left = rect.left ?? 0
+  const top = rect.top ?? 0
+  const right = rect.right != null ? rect.right : left + (rect.width || 0)
+  const bottom = rect.bottom != null ? rect.bottom : top + (rect.height || 0)
+  return x >= left && x <= right && y >= top && y <= bottom
+}
+
+function resolveLongPressStickerUrl(m, point, imgRects) {
+  if (!m) return null
+  if (m.msgType === MSG_EMOJI) return m.content || null
+  if (m.msgType !== 2) return null
+  const urls = imageUrlsOf(m)
+  if (!urls.length) return m.content || null
+  if (point && Array.isArray(imgRects) && imgRects.length) {
+    for (let i = 0; i < imgRects.length; i++) {
+      if (rectContains(imgRects[i], point.x, point.y)) {
+        return urls[i] || urls[0] || m.content || null
+      }
+    }
+  }
+  return urls[0] || m.content || null
+}
+
+function onMsgLong(m, e) {
   if (!m || m.msgType === 4 || m.streaming) return
   closeAuxPanels()
+  const touch = pickTouchPoint(e) || lastBubbleTouch.value || null
+  const urls = m.msgType === 2 ? imageUrlsOf(m) : []
   const proxy = instance?.proxy
   const q = uni.createSelectorQuery()
   if (proxy) q.in(proxy)
-  q.select('#m-' + m.id).boundingClientRect((rect) => {
+  q.select('#m-' + m.id).boundingClientRect()
+  urls.forEach((_, ii) => {
+    q.select('#mi-' + m.id + '-' + ii).boundingClientRect()
+  })
+  q.exec((res) => {
+    const rect = res && res[0]
     if (!rect) return
+    const imgRects = urls.length ? (res.slice(1, 1 + urls.length) || []) : []
+    menuStickerUrl.value = resolveLongPressStickerUrl(m, touch, imgRects)
     menuAnchor.value = {
       left: rect.left,
       top: rect.top,
@@ -1454,30 +2459,36 @@ function onMsgLong(m) {
       height: rect.height
     }
     menuMsg.value = m
-    try { uni.vibrateShort && uni.vibrateShort({ type: 'light' }) } catch (e) {}
-  }).exec()
+    try { uni.vibrateShort && uni.vibrateShort({ type: 'light' }) } catch (err) {}
+  })
 }
 
 function onMenuAction(key) {
   const m = menuMsg.value
+  const stickerUrl = menuStickerUrl.value
   closeMsgMenu()
   if (!m) return
   if (key === 'copy') copyMessage(m)
   else if (key === 'forward') openForward(m)
   else if (key === 'quote') quoteMessage(m)
-  else if (key === 'addSticker') addMessageAsSticker(m)
+  else if (key === 'addSticker') addMessageAsSticker(m, stickerUrl)
   else if (key === 'delete') deleteMessage(m)
   else if (key === 'recall') recallMessage(m)
 }
 
-async function addMessageAsSticker(m) {
-  if (!m?.content || (m.msgType !== 2 && m.msgType !== MSG_EMOJI)) {
+async function addMessageAsSticker(m, preferredUrl) {
+  const urls = m?.msgType === 2 ? imageUrlsOf(m) : []
+  const url = preferredUrl
+    || (m?.msgType === MSG_EMOJI ? m.content : null)
+    || urls[0]
+    || m?.content
+  if (!url || (m.msgType !== 2 && m.msgType !== MSG_EMOJI)) {
     uni.showToast({ title: '仅支持图片消息', icon: 'none' })
     return
   }
   try {
     uni.showLoading({ title: '添加中', mask: true })
-    await api.addSticker({ url: m.content })
+    await api.addSticker({ url })
     uni.hideLoading()
     uni.showToast({ title: '已加入表情包', icon: 'none' })
     if (stickerPanelRef.value?.reload) {
@@ -1504,7 +2515,7 @@ function onChipReact(m, emoji) {
 function patchMsgExtra(msgId, extraJson) {
   const idx = messages.value.findIndex(x => Number(x.id) === Number(msgId))
   if (idx < 0) return
-  messages.value[idx] = { ...messages.value[idx], extraJson }
+  messages.value[idx] = normalizeMsg({ ...messages.value[idx], extraJson })
 }
 
 function applyRemoteReaction(payload) {
@@ -1569,9 +2580,13 @@ async function applyReaction(m, emoji) {
 
 function copyMessage(m) {
   if (m.msgType === 2) {
+    const cap = imageCaption(m)
+    const urls = imageUrlsOf(m).map((u) => fullUrl(u)).filter(Boolean)
+    const linkBlock = urls.join('\n')
+    const data = cap ? (cap + '\n' + linkBlock) : linkBlock
     uni.setClipboardData({
-      data: fullUrl(m.content),
-      success: () => uni.showToast({ title: '图片链接已复制', icon: 'none' })
+      data,
+      success: () => uni.showToast({ title: cap ? '已复制' : '图片链接已复制', icon: 'none' })
     })
     return
   }
@@ -1635,12 +2650,11 @@ async function openForward(m) {
   showForward.value = true
   try {
     const list = await api.conversations()
-    forwardList.value = (list || []).filter(c => Number(c.id) !== Number(conversationId.value))
+    // 包含当前会话，允许转发回本聊天
+    forwardList.value = list || []
     store.setConversations(list || [])
   } catch (e) {
-    forwardList.value = (store.state.conversations || []).filter(
-      c => Number(c.id) !== Number(conversationId.value)
-    )
+    forwardList.value = store.state.conversations || []
   }
 }
 
@@ -1660,12 +2674,24 @@ async function confirmForward(conv) {
   if (m.msgType === MSG_VOICE) {
     const dur = parseVoiceExtra(m.extraJson).duration
     payload.extraJson = stringifyExtra({ duration: dur })
+  } else if (m.msgType === 2) {
+    const base = {}
+    const cap = imageCaption(m)
+    const urls = imageUrlsOf(m)
+    if (cap) base.caption = cap
+    if (urls.length > 1) base.images = urls
+    if (Object.keys(base).length) payload.extraJson = stringifyExtra(base)
   }
   try {
     uni.showLoading({ title: '转发中', mask: true })
-    await api.sendMessage(payload)
+    const sent = await api.sendMessage(payload)
     uni.hideLoading()
     closeForward()
+    // 转发回本聊天：本地立刻插入，避免仅依赖 WS 回声
+    if (Number(conv.id) === Number(conversationId.value) && sent) {
+      upsertMsg(sent)
+      scrollToBottom(true)
+    }
     uni.showToast({ title: '已转发', icon: 'none' })
   } catch (e) {
     uni.hideLoading()
@@ -1804,14 +2830,31 @@ page {
 }
 .msgs-inner {
   padding: 28rpx;
-  padding-bottom: calc(320rpx + env(safe-area-inset-bottom));
+  /* 输入区已在文档流底部，无需再为 fixed 输入栏预留大块 padding */
+  padding-bottom: 28rpx;
   width: 100%;
   max-width: 100%;
   box-sizing: border-box;
   overflow-x: hidden;
 }
+.history-end {
+  text-align: center;
+  font-size: 22rpx;
+  color: $pc-muted;
+  padding: 8rpx 0 20rpx;
+  opacity: 0.85;
+}
 .bottom-anchor { height: 1px; width: 100%; }
-.typing { color: $pc-muted; font-size: 22rpx; margin-bottom: 14rpx; }
+.typing-bar {
+  flex-shrink: 0;
+  padding: 0 28rpx 8rpx;
+}
+.typing {
+  display: inline-block;
+  color: $pc-muted;
+  font-size: 22rpx;
+  line-height: 1.4;
+}
 .msg-block {
   max-width: 100%;
   box-sizing: border-box;
@@ -1944,6 +2987,27 @@ page {
 }
 .txt { font-size: 28rpx; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
 .cursor { color: $pc-purple; margin-left: 4rpx; animation: pc-pulse 0.8s infinite; }
+.img-album {
+  display: block;
+  max-width: 360rpx;
+}
+.img-album.multi {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6rpx;
+  width: 360rpx;
+}
+.img-album.multi .img.cell {
+  width: calc(50% - 3rpx);
+  height: 176rpx;
+  min-height: 0;
+  border-radius: 10rpx;
+}
+.img-album.multi.count-3 .img.cell:first-child,
+.img-album.multi.count-1 .img.cell {
+  width: 100%;
+  height: 220rpx;
+}
 .img {
   width: 360rpx;
   min-height: 160rpx;
@@ -1994,6 +3058,14 @@ page {
   background: transparent;
   border-color: transparent;
 }
+.bubble.img-with-caption {
+  padding: 8rpx 8rpx 16rpx;
+}
+.img-caption {
+  display: block;
+  margin-top: 12rpx;
+  padding: 0 12rpx;
+}
 .aux-dismiss-mask {
   position: fixed;
   left: 0;
@@ -2015,10 +3087,9 @@ page {
 }
 .at-item { padding: 18rpx 24rpx; color: $pc-text; font-size: 26rpx; }
 .composer-wrap {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  /* 文档流底部 + softinputMode:adjustResize，随视口收缩贴在键盘上方，避免再手动 bottom 造成双倍上移 */
+  position: relative;
+  flex-shrink: 0;
   z-index: 28;
   width: 100%;
   max-width: 100%;
@@ -2076,6 +3147,73 @@ page {
   font-size: 36rpx;
   line-height: 1;
   flex-shrink: 0;
+}
+.stage-bar {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+  padding: 12rpx 14rpx;
+  border-radius: 14rpx;
+  background: rgba(167, 139, 250, 0.1);
+  border: 1px solid rgba(167, 139, 250, 0.22);
+}
+.stage-bar__scroll {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+}
+.stage-bar__list {
+  display: inline-flex;
+  align-items: center;
+  gap: 12rpx;
+  padding: 2rpx 0;
+}
+.stage-bar__item {
+  position: relative;
+  width: 96rpx;
+  height: 96rpx;
+  flex-shrink: 0;
+}
+.stage-bar__thumb {
+  width: 96rpx;
+  height: 96rpx;
+  border-radius: 12rpx;
+  background: rgba(28, 16, 48, 0.55);
+}
+.stage-bar__remove {
+  position: absolute;
+  top: -8rpx;
+  right: -8rpx;
+  width: 36rpx;
+  height: 36rpx;
+  border-radius: 50%;
+  background: rgba(28, 16, 48, 0.85);
+  color: #fff;
+  font-size: 28rpx;
+  line-height: 36rpx;
+  text-align: center;
+}
+.stage-bar__add {
+  width: 96rpx;
+  height: 96rpx;
+  border-radius: 12rpx;
+  border: 1px dashed rgba(167, 139, 250, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: rgba(28, 16, 48, 0.28);
+}
+.stage-bar__add-icon {
+  color: $pc-purple;
+  font-size: 40rpx;
+  line-height: 1;
+}
+.stage-bar__clear {
+  flex-shrink: 0;
+  color: $pc-muted;
+  font-size: 24rpx;
+  padding: 8rpx 4rpx;
 }
 .fwd-mask {
   position: fixed;
@@ -2240,10 +3378,36 @@ $tool-ico-lit: #C4B5FD;
   border-bottom: 9rpx solid $tool-ico-idle;
   transition: border-bottom-color 0.2s ease;
 }
+.ico-heart__l,
+.ico-heart__r {
+  position: absolute;
+  top: 7rpx;
+  width: 13rpx;
+  height: 13rpx;
+  border-radius: 50%;
+  background: $tool-ico-idle;
+  transition: background 0.2s ease, box-shadow 0.2s ease;
+}
+.ico-heart__l { left: 5rpx; }
+.ico-heart__r { left: 14rpx; }
+.ico-heart__tip {
+  position: absolute;
+  left: 9.5rpx;
+  top: 12rpx;
+  width: 13rpx;
+  height: 13rpx;
+  background: $tool-ico-idle;
+  transform: rotate(45deg);
+  border-radius: 2rpx;
+  transition: background 0.2s ease, box-shadow 0.2s ease;
+}
 .tool:active .ico-mic__head,
 .tool:active .ico-mic__arc { border-color: $tool-ico-lit; }
 .tool:active .ico-mic__stand,
-.tool:active .ico-img__sun { background: $tool-ico-lit; }
+.tool:active .ico-img__sun,
+.tool:active .ico-heart__l,
+.tool:active .ico-heart__r,
+.tool:active .ico-heart__tip { background: $tool-ico-lit; }
 .tool:active .ico-img__frame { border-color: $tool-ico-lit; }
 .tool:active .ico-img__hill { border-bottom-color: $tool-ico-lit; }
 .tool.active .ico-mic__head {
@@ -2259,6 +3423,12 @@ $tool-ico-lit: #C4B5FD;
 }
 .tool.active .ico-img__sun { background: $pc-magenta; }
 .tool.active .ico-img__hill { border-bottom-color: $pc-rose; }
+.tool.active .ico-heart__l,
+.tool.active .ico-heart__r,
+.tool.active .ico-heart__tip {
+  background: $pc-rose;
+  box-shadow: 0 0 8rpx rgba(244, 63, 94, 0.35);
+}
 .input {
   width: 100%;
   box-sizing: border-box;
