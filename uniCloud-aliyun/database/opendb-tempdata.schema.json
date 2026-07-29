@@ -1,0 +1,26 @@
+{
+  "bsonType": "object",
+  "required": [],
+  "permission": {
+    "read": false,
+    "create": false,
+    "update": false,
+    "delete": false
+  },
+  "properties": {
+    "_id": {
+      "description": "ID，系统自动生成"
+    },
+    "key": {
+      "bsonType": "string",
+      "description": "临时键（uni-cloud-push 内部 token 等）"
+    },
+    "value": {
+      "description": "临时值"
+    },
+    "expired": {
+      "bsonType": "timestamp",
+      "description": "过期时间"
+    }
+  }
+}

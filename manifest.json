@@ -2,8 +2,8 @@
     "name" : "脉冲",
     "appid" : "__UNI__BC66A18",
     "description" : "霓虹脉冲实时聊天",
-    "versionName" : "1.0.1.002",
-    "versionCode" : 1000002,
+    "versionName" : "1.0.2.007",
+    "versionCode" : 1020007,
     "transformPx" : false,
     "app-plus" : {
         "usingComponents" : true,
@@ -14,7 +14,10 @@
             "autoclose" : true,
             "delay" : 0
         },
-        "modules" : {},
+        "modules" : {
+            "Push" : {},
+            "Camera" : {}
+        },
         "distribute" : {
             "android" : {
                 "usesCleartextTraffic" : true,
@@ -26,7 +29,10 @@
                     "<uses-permission android:name=\"android.permission.ACCESS_WIFI_STATE\"/>",
                     "<uses-permission android:name=\"android.permission.WRITE_EXTERNAL_STORAGE\"/>",
                     "<uses-permission android:name=\"android.permission.READ_EXTERNAL_STORAGE\"/>",
-                    "<uses-permission android:name=\"android.permission.READ_MEDIA_IMAGES\"/>"
+                    "<uses-permission android:name=\"android.permission.READ_MEDIA_IMAGES\"/>",
+                    "<uses-permission android:name=\"android.permission.POST_NOTIFICATIONS\"/>",
+                    "<uses-permission android:name=\"android.permission.RECEIVE_USER_PRESENT\"/>",
+                    "<uses-permission android:name=\"android.permission.WAKE_LOCK\"/>"
                 ]
             },
             "ios" : {
@@ -35,9 +41,27 @@
                     "NSPhotoLibraryUsageDescription" : "用于选择与保存聊天图片",
                     "NSPhotoLibraryAddUsageDescription" : "用于将图片保存到相册"
                 },
-                "dSYMs" : false
+                "dSYMs" : false,
+                "capabilities" : {
+                    "entitlements" : {
+                        "aps-environment" : "development"
+                    }
+                }
             },
-            "sdkConfigs" : {},
+            "sdkConfigs" : {
+                "push" : {
+                    "unipush" : {
+                        "version" : "2",
+                        "offline" : true,
+                        "icons" : {
+                            "small" : {
+                                "xxhdpi" : "unpackage/res/icons/72x72.png"
+                            }
+                        }
+                    }
+                },
+                "share" : {}
+            },
             "icons" : {
                 "android" : {
                     "hdpi" : "unpackage/res/icons/72x72.png",
@@ -72,11 +96,11 @@
             },
             "splashscreen" : {
                 "androidStyle" : "default",
-                "useOriginalMsgbox" : false,
+                "useOriginalMsgbox" : true,
                 "android" : {
-                    "xxhdpi" : "C:/Users/caiji/Desktop/1080_.png",
-                    "xhdpi" : "C:/Users/caiji/Desktop/720_.png",
-                    "hdpi" : "C:/Users/caiji/Desktop/480_.png"
+                    "xxhdpi" : "unpackage/res/icons/1080_.png",
+                    "xhdpi" : "unpackage/res/icons/720_.png",
+                    "hdpi" : "unpackage/res/icons/480_.png"
                 }
             }
         }
@@ -95,5 +119,6 @@
         }
     },
     "vueVersion" : "3",
-    "locale" : "auto"
+    "locale" : "auto",
+    "fallbackLocale" : "zh-Hans"
 }

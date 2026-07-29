@@ -3,11 +3,35 @@ import { sortConversations } from './chat-settings.js'
 import { api } from './request.js'
 
 /**
- * UniPush/个推在模拟器（尤其 MuMu）上会疯狂重试并拖垮进程。
- * 先关掉所有 plus.push / getPushClientId 调用；本地 Android 通知仍可用。
- * 真机要测离线推送时再改为 true，并配好 UniPush。
+ * UniPush 2.0：真机启用；模拟器（尤其 MuMu）个推会疯狂重试拖垮进程，自动跳过。
+ * 前台：WebSocket + 本地系统通知。
+ * 后台（进程存活）/离线：服务端 UniPush；切后台会清前台标记并断开 WS，避免「在线却弹不出通知」。
  */
-const UNIPUSH_ENABLED = false
+function isLikelyEmulator() {
+  try {
+    const info = uni.getSystemInfoSync() || {}
+    const hay = [
+      info.model,
+      info.brand,
+      info.deviceModel,
+      info.deviceBrand,
+      info.system
+    ].filter(Boolean).join(' ').toLowerCase()
+    return /emulator|sdk_gphone|android sdk built for|genymotion|mumu|nox|ldplayer|bluestacks|leidian|xiaoyao|memu|vbox|virtualbox|tiantian|yeshen|雷电|夜神|逍遥/.test(hay)
+  } catch (e) {
+    return false
+  }
+}
+
+function isUniPushEnabled() {
+  if (typeof plus === 'undefined') return false
+  try {
+    if (plus.runtime && typeof plus.runtime.isAgreePrivacy === 'function' && !plus.runtime.isAgreePrivacy()) {
+      return false
+    }
+  } catch (e) {}
+  return !isLikelyEmulator()
+}
 
 const ENABLED_KEY = 'pc_notify_enabled'
 const CID_KEY = 'pc_push_client_id'
@@ -15,6 +39,12 @@ const CHANNEL_ID = 'pulse_chat_messages'
 const CHANNEL_NAME = '消息通知'
 
 let appVisible = true
+let lastBecameVisibleAt = 0
+/** 回前台后短窗口内，个推离线库批量透传不要逐条弹系统通知 */
+const RESUME_PUSH_COALESCE_MS = 2800
+let resumeBatchCount = 0
+let resumeBatchTimer = null
+let resumeBatchSample = null
 let pushHandlersInstalled = false
 let channelReady = false
 let notifySeq = 1
@@ -50,7 +80,17 @@ export function setNotifyPrefs(partial = {}) {
 }
 
 export function setAppVisible(visible) {
-  appVisible = !!visible
+  const next = !!visible
+  if (next && !appVisible) {
+    lastBecameVisibleAt = Date.now()
+    resumeBatchCount = 0
+    resumeBatchSample = null
+    if (resumeBatchTimer) {
+      clearTimeout(resumeBatchTimer)
+      resumeBatchTimer = null
+    }
+  }
+  appVisible = next
 }
 
 export function isAppVisible() {
@@ -138,6 +178,21 @@ function ensureAndroidChannel() {
   }
 }
 
+/** Android 系统层是否允许通知（权限关则本地/厂商推送都可能无栏） */
+function areAndroidNotificationsEnabled() {
+  if (typeof plus === 'undefined' || plus.os.name !== 'Android') return true
+  try {
+    const main = plus.android.runtimeMainActivity()
+    const Context = plus.android.importClass('android.content.Context')
+    const nm = main.getSystemService(Context.NOTIFICATION_SERVICE)
+    plus.android.importClass(nm)
+    if (typeof nm.areNotificationsEnabled === 'function') {
+      return !!nm.areNotificationsEnabled()
+    }
+  } catch (e) {}
+  return true
+}
+
 function withLocalMark(payload) {
   return { ...(payload || {}), _pcLocal: 1 }
 }
@@ -204,7 +259,20 @@ function createAndroidNativeNotification(title, content, payload, notifyId) {
 }
 
 function createPlusPushMessage(title, content, payload) {
-  if (!UNIPUSH_ENABLED) return false
+  if (!isUniPushEnabled()) return false
+  // UniPush 2.0 推荐本地通知 API
+  try {
+    if (typeof uni !== 'undefined' && typeof uni.createPushMessage === 'function') {
+      uni.createPushMessage({
+        title: String(title || '脉冲'),
+        content: String(content || ''),
+        payload: withLocalMark(payload),
+        sound: 'system',
+        cover: false
+      })
+      return true
+    }
+  } catch (e) {}
   if (typeof plus === 'undefined' || !plus.push || typeof plus.push.createMessage !== 'function') {
     return false
   }
@@ -231,7 +299,7 @@ function createSystemNotification(title, content, payload, notifyId) {
 
   installPushHandlers()
 
-  // Android：优先原生 Notification，稳定弹出系统通知栏
+  // Android：优先原生 Notification，稳定弹出系统通知栏（前台/后台均可）
   if (plus.os.name === 'Android') {
     if (createAndroidNativeNotification(title, content, payload, notifyId)) return true
   }
@@ -254,41 +322,117 @@ function consumePendingNotifyPayload() {
   } catch (e) {}
 }
 
-function installPushHandlers() {
-  if (!UNIPUSH_ENABLED) return
-  if (pushHandlersInstalled) return
-  if (typeof plus === 'undefined' || !plus.push) return
-  pushHandlersInstalled = true
+function normalizePushPayload(raw) {
+  let payload = raw
   try {
-    if (typeof plus.push.setAutoNotification === 'function') {
+    if (typeof payload === 'string') payload = JSON.parse(payload || '{}')
+  } catch (e) {
+    payload = {}
+  }
+  if (payload === 'LocalMSG') return null
+  if (payload && typeof payload === 'object' && payload._pcLocal) return null
+  return payload && typeof payload === 'object' ? payload : {}
+}
+
+function flushResumePushBatch() {
+  if (resumeBatchTimer) {
+    clearTimeout(resumeBatchTimer)
+    resumeBatchTimer = null
+  }
+  const sample = resumeBatchSample
+  const n = resumeBatchCount
+  resumeBatchSample = null
+  resumeBatchCount = 0
+  if (!sample || n <= 0) return
+  if (n === 1) {
+    createSystemNotification(sample.title, sample.content, sample.data, sample.notifyId)
+    return
+  }
+  createSystemNotification(
+    '脉冲',
+    '你有 ' + n + ' 条新消息',
+    sample.data,
+    sample.notifyId
+  )
+}
+
+function shouldCoalesceResumePush() {
+  if (!appVisible || lastBecameVisibleAt <= 0) return false
+  return (Date.now() - lastBecameVisibleAt) < RESUME_PUSH_COALESCE_MS
+}
+
+function showIncomingPush(msg) {
+  if (!msg) return
+  const data = normalizePushPayload(msg.payload ?? msg.data?.payload ?? msg.data)
+  if (data == null) return
+  // 点击通知栏 / iOS aps 已由系统展示，不再重复创建
+  if (msg.aps || msg.type === 'click') return
+  const title = msg.title || msg.data?.title || data.title || '脉冲'
+  const content = msg.content || msg.data?.content || data.content || '你有一条新消息'
+  const notifyId = data.convId != null ? Number(data.convId) : (Date.now() % 100000)
+  // 真正后台（进程仍醒、JS 能跑）：本地强制出栏；force_notification 未必对在线透传出栏
+  // 刚回前台：个推离线库批量下发透传，合并成一条，避免「打开 App 一起弹」
+  if (shouldCoalesceResumePush()) {
+    resumeBatchCount += 1
+    resumeBatchSample = { title, content, data, notifyId }
+    if (!resumeBatchTimer) {
+      resumeBatchTimer = setTimeout(() => {
+        resumeBatchTimer = null
+        flushResumePushBatch()
+      }, 450)
+    }
+    return
+  }
+  createSystemNotification(title, content, data, notifyId)
+}
+
+function installPushHandlers() {
+  if (!isUniPushEnabled()) return
+  if (pushHandlersInstalled) return
+  if (typeof plus === 'undefined') return
+  pushHandlersInstalled = true
+
+  // UniPush 2.0 推荐 API
+  try {
+    if (typeof uni !== 'undefined' && typeof uni.onPushMessage === 'function') {
+      uni.onPushMessage((res) => {
+        if (!res) return
+        if (res.type === 'click') {
+          const data = res.data || {}
+          handleNotifyPayload(data.payload != null ? data.payload : data)
+          return
+        }
+        if (res.type === 'receive') {
+          showIncomingPush({
+            title: res.data?.title,
+            content: res.data?.content,
+            payload: res.data?.payload != null ? res.data.payload : res.data,
+            aps: res.data?.aps
+          })
+        }
+      })
+    }
+  } catch (e) {}
+
+  try {
+    if (plus.push && typeof plus.push.setAutoNotification === 'function') {
       plus.push.setAutoNotification(true)
     }
   } catch (e) {}
   try {
-    plus.push.addEventListener('click', (msg) => {
-      handleNotifyPayload(msg?.payload)
-    }, false)
+    if (plus.push) {
+      plus.push.addEventListener('click', (msg) => {
+        handleNotifyPayload(msg?.payload)
+      }, false)
+    }
   } catch (e) {}
   // 云端透传推送：未自动展示时转为系统通知（本地消息带 _pcLocal，直接忽略）
   try {
-    plus.push.addEventListener('receive', (msg) => {
-      if (!msg) return
-      let payload = msg.payload
-      try {
-        if (typeof payload === 'string') payload = JSON.parse(payload || '{}')
-      } catch (e) {
-        payload = {}
-      }
-      if (payload === 'LocalMSG') return
-      if (payload && typeof payload === 'object' && payload._pcLocal) return
-      // 已是通知栏消息（含 aps）时不再重复创建
-      if (msg.aps || msg.type === 'click') return
-      const data = payload && typeof payload === 'object' ? payload : {}
-      const title = msg.title || data.title || '脉冲'
-      const content = msg.content || data.content || '你有一条新消息'
-      const notifyId = data.convId != null ? Number(data.convId) : (Date.now() % 100000)
-      createSystemNotification(title, content, data, notifyId)
-    }, false)
+    if (plus.push) {
+      plus.push.addEventListener('receive', (msg) => {
+        showIncomingPush(msg)
+      }, false)
+    }
   } catch (e) {}
 }
 
@@ -305,11 +449,17 @@ function requestNotifyPermission() {
         )
       }
       ensureAndroidChannel()
+      // 系统通知总开关关闭时，本地 Notification / 厂商通道都可能无栏
+      if (!areAndroidNotificationsEnabled()) {
+        try {
+          console.warn('[notify] Android 通知权限未开启，系统通知栏将无法展示')
+        } catch (e) {}
+      }
       return
     }
   } catch (e) {}
   // iOS：触发系统通知授权弹窗（同时可拿到 CID）
-  if (!UNIPUSH_ENABLED) return
+  if (!isUniPushEnabled()) return
   try {
     resolvePushClientId().catch(() => {})
   } catch (e) {}
@@ -344,9 +494,9 @@ function readCachedClientId() {
   }
 }
 
-/** 获取 UniPush / 个推 CID */
-export function resolvePushClientId() {
-  if (!UNIPUSH_ENABLED) return Promise.resolve('')
+/** 单次尝试获取 UniPush / 个推 CID */
+function tryResolvePushClientIdOnce() {
+  if (!isUniPushEnabled()) return Promise.resolve('')
   return new Promise((resolve) => {
     const finish = (cid) => {
       const id = cid ? String(cid).trim() : ''
@@ -364,6 +514,20 @@ export function resolvePushClientId() {
     } catch (e) {}
     tryPlusClientId(finish)
   })
+}
+
+/** 获取 CID；个推初始化较慢时短轮询，避免登录后立刻上报为空 */
+export async function resolvePushClientId() {
+  if (!isUniPushEnabled()) return ''
+  const delays = [0, 800, 2000, 4000, 8000]
+  for (let i = 0; i < delays.length; i++) {
+    if (delays[i] > 0) {
+      await new Promise((r) => setTimeout(r, delays[i]))
+    }
+    const cid = await tryResolvePushClientIdOnce()
+    if (cid) return cid
+  }
+  return readCachedClientId() || ''
 }
 
 function tryPlusClientId(finish) {
@@ -389,7 +553,7 @@ function tryPlusClientId(finish) {
 
 /** 登录后 / App 启动：上报 CID 供离线推送 */
 export async function registerPushClient() {
-  if (!UNIPUSH_ENABLED) return ''
+  if (!isUniPushEnabled()) return ''
   const prefs = getNotifyPrefs()
   if (!prefs.enabled) return ''
   const store = getStore()
@@ -411,21 +575,23 @@ export async function registerPushClient() {
   }
 }
 
-/** 延迟重试：自定义基座上 CID 有时稍后才就绪 */
+/** 延迟重试：自定义基座 / 正式包上 CID 常延迟就绪（曾出现登录后 1 分钟才有 CID） */
 export function scheduleRegisterPushClient(delayMs = 800) {
-  if (!UNIPUSH_ENABLED) return
+  if (!isUniPushEnabled()) return
   if (registerPushTimer) {
     clearTimeout(registerPushTimer)
     registerPushTimer = null
   }
+  const delays = [delayMs, delayMs + 2500, delayMs + 8000, delayMs + 20000]
   registerPushTimer = setTimeout(() => {
     registerPushTimer = null
     registerPushClient().catch(() => {})
-  }, delayMs)
-  // 再补一次，覆盖晚到的 CID
-  setTimeout(() => {
-    registerPushClient().catch(() => {})
-  }, delayMs + 2500)
+  }, delays[0])
+  for (let i = 1; i < delays.length; i++) {
+    setTimeout(() => {
+      registerPushClient().catch(() => {})
+    }, delays[i])
+  }
 }
 
 /** 退出登录：解绑当前设备 CID */
@@ -484,30 +650,77 @@ export function handleNotifyMessage(body) {
     return
   }
 
-  if (body.type !== 'conversation_updated') return
+  if (body.type !== 'conversation_updated') {
+    if (body.type === 'conversation_cleared') {
+      const payload = body.payload || {}
+      const conv = payload.conversation
+      const id = payload.conversationId != null ? payload.conversationId : conv?.id
+      if (id == null) return
+      const store = getStore()
+      if (conv) {
+        store.upsertConversation({
+          ...conv,
+          lastMsgId: null,
+          lastMsgPreview: '',
+          lastMsgAt: null,
+          unreadCount: 0,
+          aiStreaming: false,
+          aiStreamClientMsgId: null,
+          aiStreamContent: ''
+        })
+      } else {
+        store.upsertConversation({
+          id,
+          lastMsgId: null,
+          lastMsgPreview: '',
+          lastMsgAt: null,
+          unreadCount: 0
+        })
+      }
+      return
+    }
+    return
+  }
   const payload = body.payload
   if (!payload || payload.id == null) return
 
   const store = getStore()
   const prev = (store.state.conversations || []).find(c => Number(c.id) === Number(payload.id))
   const prevUnread = Number(prev?.unreadCount) || 0
-  const nextUnread = Number(payload.unreadCount) || 0
-  store.upsertConversation(payload)
-
   const activeId = store.state.activeChatId
-  // 正在看该会话且 App 在前台时，不再弹系统通知
-  if (appVisible && activeId != null && Number(activeId) === Number(payload.id)) {
-    return
+  const viewing = appVisible && activeId != null && Number(activeId) === Number(payload.id)
+  // 正在看该会话，或本地已读水位已覆盖最新消息时，忽略迟到的未读增量
+  // （@Kimi / AI 落库会先推 unread>0，随后 markRead 才清零，否则回列表仍留红点）
+  let nextPayload = payload
+  if (viewing) {
+    const lastMsgId = Number(payload.lastMsgId) || 0
+    if (lastMsgId > 0) store.markConversationReadLocal(payload.id, lastMsgId)
+    nextPayload = { ...payload, unreadCount: 0 }
+  } else if (store.isReadUpTo(payload.id, payload.lastMsgId) && (Number(payload.unreadCount) || 0) > 0) {
+    nextPayload = { ...payload, unreadCount: 0 }
+  } else if ((Number(payload.unreadCount) || 0) === 0 && payload.lastMsgId) {
+    // 已读回推：抬高本地水位，挡住更晚到达的未读推送
+    store.markConversationReadLocal(payload.id, payload.lastMsgId)
   }
+  const nextUnread = Number(nextPayload.unreadCount) || 0
+  store.upsertConversation(nextPayload)
+
+  // 正在看该会话且 App 在前台时，不再弹系统通知
+  if (viewing) return
   if (nextUnread <= prevUnread) return
 
-  alertNewMessage(payload)
+  alertNewMessage(nextPayload)
 }
 
 let installed = false
 
 export function installNotifyListener() {
   if (installed) return
+  try {
+    if (typeof plus !== 'undefined' && plus.runtime && typeof plus.runtime.isAgreePrivacy === 'function' && !plus.runtime.isAgreePrivacy()) {
+      return
+    }
+  } catch (e) {}
   installed = true
   installPushHandlers()
   requestNotifyPermission()
@@ -527,6 +740,7 @@ export function onAppShowNotify() {
   requestNotifyPermission()
   const store = getStore()
   if (store.state.token) {
+    // 无效 CID 被服务端清理后，回到前台必须重新 getPushClientId 并上报
     scheduleRegisterPushClient(400)
   }
 }

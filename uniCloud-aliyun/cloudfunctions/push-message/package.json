@@ -1,0 +1,10 @@
+{
+  "name": "push-message",
+  "version": "1.0.1",
+  "description": "PulseChat UniPush 2.0 推送网关（依赖 database 下 opendb-tempdata/opendb-device/uni-id-device）",
+  "main": "index.js",
+  "extensions": {
+    "uni-cloud-push": {}
+  },
+  "dependencies": {}
+}
