@@ -81,7 +81,7 @@ export const api = {
   conversation: (id) => request({ url: '/api/conversations/' + id }),
   privateChat: (peerId) => request({ url: '/api/conversations/private/' + peerId, method: 'POST' }),
   createGroup: (data) => request({ url: '/api/conversations/groups', method: 'POST', data }),
-  groupMembers: (id) => request({ url: '/api/conversations/' + id + '/members' }),
+  groupMembers: (id) => request({ url: '/api/conversations/' + id + '/members', silent: true }),
   inviteMembers: (id, memberIds) => request({
     url: '/api/conversations/' + id + '/invite',
     method: 'POST',
@@ -93,6 +93,7 @@ export const api = {
   }),
   addBot: (id) => request({ url: '/api/conversations/' + id + '/bot', method: 'POST' }),
   markRead: (id, lastMsgId, silent = false) => request({ url: '/api/conversations/' + id + '/read', method: 'POST', data: { lastMsgId }, silent }),
+  updateConvDraft: (id, data) => request({ url: '/api/conversations/' + id + '/draft', method: 'PUT', data }),
   messages: (conversationId, beforeId) => request({
     url: '/api/messages?conversationId=' + conversationId + (beforeId ? '&beforeId=' + beforeId : '')
   }),
@@ -106,6 +107,11 @@ export const api = {
     silent: true
   }),
   openAiChat: () => request({ url: '/api/ai/chat', method: 'POST' }),
+  /** 清空与 Kimi 私聊的云端聊天记录与上下文 */
+  clearAiChatHistory: (conversationId) => request({
+    url: '/api/ai/chat/' + conversationId + '/clear',
+    method: 'POST'
+  }),
   botProfile: () => request({ url: '/api/ai/bot' }),
   userProfile: (id) => request({ url: '/api/users/' + id }),
   checkFriend: (friendId) => request({ url: '/api/friends/check/' + friendId, silent: true }),
@@ -149,6 +155,18 @@ export const api = {
       silent: true
     })
   },
+  /** App 切后台：立刻清前台标记，便于 UniPush */
+  presenceAway: () => request({
+    url: '/api/users/me/presence/away',
+    method: 'POST',
+    silent: true
+  }),
+  /** App 回前台 */
+  presenceActive: () => request({
+    url: '/api/users/me/presence/active',
+    method: 'POST',
+    silent: true
+  }),
   upload: (filePath, options = {}) => new Promise((resolve, reject) => {
     const store = getStore()
     const category = options.category ? '?category=' + encodeURIComponent(options.category) : ''

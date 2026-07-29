@@ -7,21 +7,24 @@
       "path": "pages/splash/splash",
       "style": {
         "navigationStyle": "custom",
-        "app-plus": { "titleNView": false }
+        "disableScroll": true,
+        "app-plus": { "titleNView": false, "bounce": "none" }
       }
     },
     {
       "path": "pages/login/login",
       "style": {
         "navigationStyle": "custom",
-        "app-plus": { "titleNView": false }
+        "disableScroll": true,
+        "app-plus": { "titleNView": false, "bounce": "none" }
       }
     },
     {
       "path": "pages/register/register",
       "style": {
         "navigationStyle": "custom",
-        "app-plus": { "titleNView": false }
+        "disableScroll": true,
+        "app-plus": { "titleNView": false, "bounce": "none" }
       }
     },
     {
@@ -32,7 +35,7 @@
         "navigationBarBackgroundColor": "#24123F",
         "navigationBarTextStyle": "white",
         "disableScroll": true,
-        "app-plus": { "titleNView": false }
+        "app-plus": { "titleNView": false, "bounce": "none" }
       }
     },
     {
@@ -45,7 +48,8 @@
         "disableScroll": true,
         "app-plus": {
           "titleNView": false,
-          "softinputMode": "adjustNothing"
+          "bounce": "none",
+          "softinputMode": "adjustResize"
         }
       }
     },
@@ -56,7 +60,8 @@
         "navigationBarTitleText": "通讯录",
         "navigationBarBackgroundColor": "#24123F",
         "navigationBarTextStyle": "white",
-        "app-plus": { "titleNView": false }
+        "disableScroll": true,
+        "app-plus": { "titleNView": false, "bounce": "none" }
       }
     },
     {
@@ -66,7 +71,8 @@
         "navigationBarTitleText": "我的",
         "navigationBarBackgroundColor": "#24123F",
         "navigationBarTextStyle": "white",
-        "app-plus": { "titleNView": false }
+        "disableScroll": true,
+        "app-plus": { "titleNView": false, "bounce": "none" }
       }
     },
     {
@@ -76,7 +82,8 @@
         "navigationBarTitleText": "搜索",
         "navigationBarBackgroundColor": "#24123F",
         "navigationBarTextStyle": "white",
-        "app-plus": { "titleNView": false }
+        "disableScroll": true,
+        "app-plus": { "titleNView": false, "bounce": "none" }
       }
     },
     {
@@ -86,7 +93,8 @@
         "navigationBarTitleText": "创建群聊",
         "navigationBarBackgroundColor": "#24123F",
         "navigationBarTextStyle": "white",
-        "app-plus": { "titleNView": false }
+        "disableScroll": true,
+        "app-plus": { "titleNView": false, "bounce": "none" }
       }
     },
     {
@@ -96,7 +104,8 @@
         "navigationBarTitleText": "编辑资料",
         "navigationBarBackgroundColor": "#24123F",
         "navigationBarTextStyle": "white",
-        "app-plus": { "titleNView": false }
+        "disableScroll": true,
+        "app-plus": { "titleNView": false, "bounce": "none" }
       }
     },
     {
@@ -106,7 +115,8 @@
         "navigationBarTitleText": "好友资料",
         "navigationBarBackgroundColor": "#24123F",
         "navigationBarTextStyle": "white",
-        "app-plus": { "titleNView": false }
+        "disableScroll": true,
+        "app-plus": { "titleNView": false, "bounce": "none" }
       }
     },
     {
@@ -116,7 +126,8 @@
         "navigationBarTitleText": "群成员",
         "navigationBarBackgroundColor": "#24123F",
         "navigationBarTextStyle": "white",
-        "app-plus": { "titleNView": false }
+        "disableScroll": true,
+        "app-plus": { "titleNView": false, "bounce": "none" }
       }
     },
     {
@@ -126,7 +137,8 @@
         "navigationBarTitleText": "添加成员",
         "navigationBarBackgroundColor": "#24123F",
         "navigationBarTextStyle": "white",
-        "app-plus": { "titleNView": false }
+        "disableScroll": true,
+        "app-plus": { "titleNView": false, "bounce": "none" }
       }
     },
     {
@@ -136,7 +148,8 @@
         "navigationBarTitleText": "聊天设置",
         "navigationBarBackgroundColor": "#24123F",
         "navigationBarTextStyle": "white",
-        "app-plus": { "titleNView": false }
+        "disableScroll": true,
+        "app-plus": { "titleNView": false, "bounce": "none" }
       }
     },
     {
@@ -146,7 +159,8 @@
         "navigationBarTitleText": "表情包管理",
         "navigationBarBackgroundColor": "#24123F",
         "navigationBarTextStyle": "white",
-        "app-plus": { "titleNView": false }
+        "disableScroll": true,
+        "app-plus": { "titleNView": false, "bounce": "none" }
       }
     }
   ],
@@ -158,6 +172,7 @@
     "backgroundColorTop": "#24123F",
     "backgroundColorBottom": "#0A0614",
     "app-plus": {
+      "bounce": "none",
       "titleNView": {
         "backgroundColor": "#24123F",
         "titleColor": "#F5EDFF"

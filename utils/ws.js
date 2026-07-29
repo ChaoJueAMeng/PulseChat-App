@@ -8,8 +8,13 @@ let reconnectTimer = null
 let connId = 0
 /** 是否正在主动关闭（避免触发自动重连） */
 let closingIntentionally = false
+/** App 进入后台时主动暂停 WS，期间禁止自动重连 */
+let pausedForBackground = false
 /** 是否处于握手中（已创建 socket，尚未收到 CONNECTED） */
 let connecting = false
+/** 活跃订阅表：destination -> { id, count, connId } */
+const subscriptions = Object.create(null)
+const CORE_DESTINATIONS = ['/user/queue/notify', '/topic/presence']
 
 const listeners = {}
 
@@ -35,14 +40,59 @@ function clearReconnectTimer() {
 }
 
 function scheduleReconnect() {
+  if (pausedForBackground) return
   if (reconnectTimer) return
   const token = getStore().state.token
   if (!token) return
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null
+    if (pausedForBackground) return
     const t = getStore().state.token
     if (t) connectWs(t)
   }, 2500)
+}
+
+function subscriptionIdOf(destination) {
+  return 'sub-' + String(destination || '').replace(/[^\w]/g, '')
+}
+
+function isSocketReady() {
+  return !!socketTask && getStore().state.connected
+}
+
+function sendFrame(frame) {
+  if (!socketTask) return false
+  try {
+    socketTask.send({ data: frame })
+    return true
+  } catch (e) {
+    return false
+  }
+}
+
+function sendSubscribeFrame(destination, id) {
+  if (!isSocketReady()) return false
+  const frame = 'SUBSCRIBE\nid:' + id + '\ndestination:' + destination + '\n\n\0'
+  return sendFrame(frame)
+}
+
+function sendUnsubscribeFrame(id) {
+  if (!isSocketReady()) return false
+  const frame = 'UNSUBSCRIBE\nid:' + id + '\n\n\0'
+  return sendFrame(frame)
+}
+
+function resubscribeActiveDestinations(activeConnId) {
+  CORE_DESTINATIONS.forEach((destination) => {
+    sendSubscribeFrame(destination, subscriptionIdOf(destination))
+  })
+  Object.keys(subscriptions).forEach((destination) => {
+    const sub = subscriptions[destination]
+    if (!sub || sub.count <= 0) return
+    if (sendSubscribeFrame(destination, sub.id)) {
+      sub.connId = activeConnId
+    }
+  })
 }
 
 function closeSocketSoft() {
@@ -55,6 +105,7 @@ function closeSocketSoft() {
 
 export function connectWs(token) {
   if (!token) return
+  pausedForBackground = false
   clearReconnectTimer()
   closeSocketSoft()
 
@@ -92,8 +143,7 @@ export function connectWs(token) {
     if (data.startsWith('CONNECTED')) {
       connecting = false
       store.setConnected(true)
-      subscribe('/user/queue/notify')
-      subscribe('/topic/presence')
+      resubscribeActiveDestinations(myId)
       startHeartbeat()
       emit('connected')
       return
@@ -166,24 +216,76 @@ export function connectWs(token) {
 export function ensureWs() {
   const token = getStore().state.token
   if (!token) return
+  pausedForBackground = false
   if (getStore().state.connected || connecting) return
   connectWs(token)
 }
 
-export function subscribe(destination) {
-  if (!socketTask) return
-  const id = 'sub-' + destination.replace(/[^\w]/g, '')
-  const frame = 'SUBSCRIBE\nid:' + id + '\ndestination:' + destination + '\n\n\0'
+/**
+ * App 进入后台：通知服务端清前台标记，并主动断开 WS。
+ * 后台 JS 常被挂起，本地通知弹不出；断开后服务端按非前台发 UniPush。
+ */
+export function pauseWsForBackground() {
+  pausedForBackground = true
+  clearReconnectTimer()
+  stopHeartbeat()
   try {
-    socketTask.send({ data: frame })
+    sendStomp('/app/chat.background', {})
+  } catch (e) {}
+  connecting = false
+  closeSocketSoft()
+  try {
+    getStore().setConnected(false)
   } catch (e) {}
 }
 
+export function notifyAppForeground() {
+  try {
+    sendStomp('/app/chat.foreground', {})
+  } catch (e) {}
+}
+
+export function subscribe(destination) {
+  if (!destination) return () => {}
+  let sub = subscriptions[destination]
+  if (!sub) {
+    sub = {
+      id: subscriptionIdOf(destination),
+      count: 0,
+      connId: 0
+    }
+    subscriptions[destination] = sub
+  }
+  sub.count += 1
+  if (sub.count === 1 && sendSubscribeFrame(destination, sub.id)) {
+    sub.connId = connId
+  }
+  return () => unsubscribe(destination)
+}
+
+export function unsubscribe(destination) {
+  const sub = subscriptions[destination]
+  if (!sub) return
+  sub.count -= 1
+  if (sub.count > 0) return
+  if (sub.connId === connId) {
+    sendUnsubscribeFrame(sub.id)
+  }
+  delete subscriptions[destination]
+}
+
 export function subscribeConversation(conversationId) {
-  subscribe('/topic/conversation.' + conversationId)
-  subscribe('/topic/conversation.' + conversationId + '.typing')
-  subscribe('/topic/conversation.' + conversationId + '.ai')
-  subscribe('/topic/conversation.' + conversationId + '.react')
+  const offs = [
+    subscribe('/topic/conversation.' + conversationId),
+    subscribe('/topic/conversation.' + conversationId + '.typing'),
+    subscribe('/topic/conversation.' + conversationId + '.ai'),
+    subscribe('/topic/conversation.' + conversationId + '.react')
+  ]
+  return () => {
+    offs.forEach((off) => {
+      try { off && off() } catch (e) {}
+    })
+  }
 }
 
 export function sendStomp(destination, payload) {
@@ -194,13 +296,13 @@ export function sendStomp(destination, payload) {
     'destination:' + destination + '\n' +
     'content-type:application/json\n\n' +
     body + '\0'
-  try {
-    socketTask.send({ data: frame })
-  } catch (e) {}
+  sendFrame(frame)
 }
 
 function startHeartbeat() {
   stopHeartbeat()
+  // 连上立刻打一次，缩短 presence 空窗，避免误发离线推送
+  sendStomp('/app/chat.heartbeat', {})
   heartbeatTimer = setInterval(() => {
     sendStomp('/app/chat.heartbeat', {})
   }, 20000)
