@@ -9,7 +9,11 @@
         @tap="activeKey = cat.key"
       >{{ cat.label }}</text>
     </view>
-    <scroll-view scroll-y class="grid-wrap">
+    <scroll-view
+      scroll-y
+      class="grid-wrap"
+      :bounces="true"
+    >
       <view class="grid">
         <text
           v-for="(e, i) in currentEmojis"

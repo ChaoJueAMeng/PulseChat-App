@@ -4,6 +4,7 @@
     :class="{ 'pc-avatar--clickable': clickable }"
     :style="wrapStyle"
     @tap="onTap"
+    @longpress="onLongpress"
   >
     <image
       class="pc-avatar__img"
@@ -35,7 +36,7 @@ const props = defineProps({
   clickable: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['tap'])
+const emit = defineEmits(['tap', 'longpress'])
 
 const imageFailed = ref(false)
 const imageSrc = ref(DEFAULT_AVATAR)
@@ -102,6 +103,10 @@ function onImageError() {
 
 function onTap(e) {
   if (props.clickable) emit('tap', e)
+}
+
+function onLongpress(e) {
+  if (props.clickable) emit('longpress', e)
 }
 </script>
 

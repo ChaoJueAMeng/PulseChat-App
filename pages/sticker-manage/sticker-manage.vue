@@ -1,30 +1,40 @@
 <template>
   <view class="page pc-aurora">
     <view class="page-header pc-nav-bar pc-page-header" :style="headerStyle">
-      <view class="pc-nav-row">
+      <view class="pc-nav-row has-side">
         <view class="pc-nav-back pc-press" @tap="goBack">
           <text class="pc-nav-back-icon">‹</text>
         </view>
         <text class="pc-nav-title">{{ editing ? '选择表情包' : '表情包管理' }}</text>
-        <text
+        <view
           v-if="list.length"
           class="nav-action pc-press"
           @tap="toggleEdit"
-        >{{ editing ? '完成' : '编辑' }}</text>
+        >
+          <text class="nav-action-text">{{ editing ? '完成' : '编辑' }}</text>
+        </view>
         <view v-else class="nav-action-placeholder"></view>
       </view>
     </view>
 
-    <view class="body">
+    <scroll-view
+      scroll-y
+      class="body"
+      :bounces="true"
+    >
       <view class="toolbar pc-card">
-        <text class="tip">{{ list.length }}/{{ max }} · 长按可置顶或删除</text>
+        <text class="tip">{{ list.length }}/{{ max }} · 点击可置顶或删除，编辑可多选</text>
         <view class="toolbar-actions">
-          <text class="btn pc-press" @tap="batchAdd">批量添加</text>
-          <text
-            v-if="editing && selected.size"
+          <view class="btn pc-press" @tap="batchAdd">
+            <text>批量添加</text>
+          </view>
+          <view
+            v-if="editing && selectedCount"
             class="btn danger pc-press"
             @tap="batchRemove"
-          >删除({{ selected.size }})</text>
+          >
+            <text>删除({{ selectedCount }})</text>
+          </view>
         </view>
       </view>
 
@@ -39,18 +49,18 @@
           v-for="(s, index) in list"
           :key="s.id"
           class="cell"
-          :class="{ selected: selected.has(s.id) }"
-          @tap="onTap(s)"
+          :class="{ selected: isSelected(s.id) }"
+          @tap="onTap(s, index)"
           @longpress="onLongPress(s, index)"
         >
           <image class="img" :src="mediaUrl(s.url)" mode="aspectFit" lazy-load />
-          <view v-if="editing" class="check" :class="{ on: selected.has(s.id) }">
-            <text v-if="selected.has(s.id)">✓</text>
+          <view v-if="editing" class="check" :class="{ on: isSelected(s.id) }">
+            <text v-if="isSelected(s.id)">✓</text>
           </view>
           <view v-if="!editing" class="order">{{ index + 1 }}</view>
         </view>
       </view>
-    </view>
+    </scroll-view>
   </view>
   <pc-feedback />
 </template>
@@ -62,22 +72,33 @@ import { api } from '../../utils/request.js'
 import { fullUrl } from '../../utils/url.js'
 import { MAX_USER_STICKERS } from '../../utils/sticker.js'
 
+
 const list = ref([])
 const loading = ref(false)
 const editing = ref(false)
-const selected = ref(new Set())
+/** 用普通对象做多选，避免 Set 在 App 端模板里不触发更新 */
+const selectedMap = ref({})
 const max = MAX_USER_STICKERS
 const statusBarHeight = uni.getSystemInfoSync().statusBarHeight || 20
 const headerStyle = computed(() => ({ paddingTop: statusBarHeight + 'px' }))
+const selectedCount = computed(() => Object.keys(selectedMap.value).length)
 
 function mediaUrl(url) {
   return fullUrl(url)
 }
 
+function isSelected(id) {
+  return !!selectedMap.value[id]
+}
+
+function clearSelected() {
+  selectedMap.value = {}
+}
+
 function goBack() {
   if (editing.value) {
     editing.value = false
-    selected.value = new Set()
+    clearSelected()
     return
   }
   uni.navigateBack()
@@ -85,7 +106,7 @@ function goBack() {
 
 function toggleEdit() {
   editing.value = !editing.value
-  selected.value = new Set()
+  clearSelected()
 }
 
 async function load() {
@@ -100,17 +121,24 @@ async function load() {
   }
 }
 
-function onTap(s) {
-  if (!editing.value) return
-  const next = new Set(selected.value)
-  if (next.has(s.id)) next.delete(s.id)
-  else next.add(s.id)
-  selected.value = next
+function onTap(s, index) {
+  if (editing.value) {
+    const next = { ...selectedMap.value }
+    if (next[s.id]) delete next[s.id]
+    else next[s.id] = true
+    selectedMap.value = next
+    return
+  }
+  openItemActions(s, index)
 }
 
 function onLongPress(s, index) {
   if (editing.value) return
   try { uni.vibrateShort && uni.vibrateShort({ type: 'light' }) } catch (err) {}
+  openItemActions(s, index)
+}
+
+function openItemActions(s, index) {
   uni.showActionSheet({
     itemList: ['放至最前', '删除'],
     success: (res) => {
@@ -129,7 +157,7 @@ async function moveToFront(index) {
   const [item] = arr.splice(index, 1)
   arr.unshift(item)
   try {
-    const ids = arr.map(s => s.id)
+    const ids = arr.map(x => x.id)
     list.value = (await api.reorderStickers(ids)) || arr
     uni.showToast({ title: '已放至最前', icon: 'none' })
   } catch (e) {
@@ -187,12 +215,17 @@ async function batchAdd() {
       } finally {
         uni.hideLoading()
       }
+    },
+    fail: (err) => {
+      const msg = err?.errMsg || ''
+      if (msg.includes('cancel') || msg.includes('Cancel')) return
+      uni.showToast({ title: '无法打开相册', icon: 'none' })
     }
   })
 }
 
 function batchRemove() {
-  const ids = Array.from(selected.value)
+  const ids = Object.keys(selectedMap.value).map(Number).filter(id => !Number.isNaN(id))
   if (!ids.length) return
   uni.showModal({
     title: '删除表情包',
@@ -204,7 +237,7 @@ function batchRemove() {
         await api.batchDeleteStickers(ids)
         const set = new Set(ids)
         list.value = list.value.filter(s => !set.has(s.id))
-        selected.value = new Set()
+        clearSelected()
         editing.value = false
         uni.showToast({ title: '已删除', icon: 'none' })
       } catch (e) {
@@ -220,23 +253,39 @@ onShow(load)
 
 <style scoped lang="scss">
 .page {
-  min-height: 100vh;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  overflow: hidden;
 }
 .page-header {
   width: 100%;
+  flex-shrink: 0;
 }
 .nav-action {
   min-width: 72rpx;
-  text-align: right;
-  padding-right: 20rpx;
+  min-height: 72rpx;
+  padding: 0 12rpx;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-shrink: 0;
+  box-sizing: border-box;
+}
+.nav-action-text {
   font-size: 28rpx;
   color: $pc-purple;
 }
 .nav-action-placeholder {
   width: 72rpx;
+  flex-shrink: 0;
 }
 .body {
+  flex: 1;
+  height: 0;
   padding: 20rpx 24rpx calc(40rpx + env(safe-area-inset-bottom));
+  box-sizing: border-box;
 }
 .toolbar {
   padding: 20rpx 22rpx;

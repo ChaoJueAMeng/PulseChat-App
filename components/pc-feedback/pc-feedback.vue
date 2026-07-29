@@ -83,20 +83,26 @@
     </view>
   </view>
 
-  <!-- Image Preview -->
+  <!-- Image Preview：勿在根节点 touchmove.prevent，否则 App 端会挡住 swiper 左右滑 -->
   <view
     v-if="isHost && state.preview.show"
     class="pc-preview"
-    @touchmove.stop.prevent
   >
     <swiper
       class="pc-preview-swiper"
-      :current="state.preview.current"
+      :key="previewSessionKey"
+      :current="swiperBindCurrent"
+      :duration="swiperDuration"
+      :circular="false"
+      :disable-touch="previewTouchLocked"
       @change="onPreviewChange"
-      @tap="onPreviewClose"
+      @animationfinish="onPreviewAnimationFinish"
     >
-      <swiper-item v-for="(url, idx) in state.preview.urls" :key="idx">
-        <view class="pc-preview-slide">
+      <swiper-item
+        v-for="(url, idx) in state.preview.urls"
+        :key="previewItemKey(url, idx)"
+      >
+        <view class="pc-preview-slide" @tap="onPreviewClose">
           <image
             class="pc-preview-img"
             :src="url"
@@ -107,11 +113,12 @@
         </view>
       </swiper-item>
     </swiper>
-    <view v-if="state.preview.urls.length > 1" class="pc-preview-indicator">
-      <text>{{ state.preview.current + 1 }} / {{ state.preview.urls.length }}</text>
+    <view class="pc-preview-indicator">
+      <text>{{ previewIndicatorText }}</text>
     </view>
-    <view class="pc-preview-hint">
-      <text>长按保存图像</text>
+    <view v-if="state.preview.loadingEarlier" class="pc-preview-loading">
+      <view class="pc-preview-loading-spin" />
+      <text>加载更早图片…</text>
     </view>
   </view>
 
@@ -141,7 +148,7 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
 import {
   feedbackState,
@@ -151,19 +158,86 @@ import {
   resolveActionSheet,
   closePreview,
   setPreviewCurrent,
+  requestPreviewReachEarlier,
+  hasPreviewForwardHandler,
+  requestPreviewForward,
   showActionSheet,
   toast,
   showLoading,
   hideLoading
 } from '../../utils/feedback.js'
+import { api } from '../../utils/request.js'
 
 const state = feedbackState
 const hostId = ref(0)
 const isHost = computed(() => isActiveFeedbackHost(hostId.value))
 const modalInput = ref('')
 const modalFocus = ref(false)
+/** 指示器 / 业务用的逻辑页码（随手势更新） */
+const previewIndex = ref(0)
+/**
+ * 仅程序跳转时写入 :current。
+ * 手势 @change 绝不能回写这里，否则快滑时受控 current 与动画抢写会抽搐。
+ */
+const swiperBindCurrent = ref(0)
+const previewSessionKey = ref(0)
+/** 相册前置同步时置 0，避免跳动动画与手势叠成频闪 */
+const swiperDuration = ref(280)
+/** 同步瞬间锁住触摸，防止加载更早图时左右滑触发错误 change */
+const previewTouchLocked = ref(false)
+const previewIndicatorText = computed(() => {
+  const total = state.preview.urls.length || 0
+  const cur = Math.min(previewIndex.value + 1, Math.max(total, 1))
+  return `${cur} / ${total}`
+})
 let saving = false
 let focusTimer = null
+let reachEarlierTimer = null
+let lastReachEarlierAt = 0
+/** 相册结构变更后的短暂同步窗口，忽略过期 change */
+let syncGuardUntil = 0
+let syncToken = 0
+let syncUnlockTimer = null
+/** 用户翻页动画未结束；结束前不触发边界预取 */
+let userAnimating = false
+
+function beginAlbumSync() {
+  const token = ++syncToken
+  if (syncUnlockTimer) {
+    clearTimeout(syncUnlockTimer)
+    syncUnlockTimer = null
+  }
+  userAnimating = false
+  previewTouchLocked.value = true
+  swiperDuration.value = 0
+  syncGuardUntil = Date.now() + 420
+  return token
+}
+
+function endAlbumSync(token) {
+  nextTick(() => {
+    syncUnlockTimer = setTimeout(() => {
+      syncUnlockTimer = null
+      if (token !== syncToken) return
+      previewTouchLocked.value = false
+      swiperDuration.value = 280
+      // 再留一小段忽略窗口，吞掉原生 swiper 迟到的 change
+      syncGuardUntil = Date.now() + 160
+    }, 64)
+  })
+}
+
+function isAlbumSyncGuarding() {
+  return previewTouchLocked.value || Date.now() < syncGuardUntil
+}
+
+function applyProgrammaticIndex(index) {
+  const len = state.preview.urls.length
+  const cur = len ? Math.min(Math.max(0, index), len - 1) : 0
+  previewIndex.value = cur
+  swiperBindCurrent.value = cur
+  setPreviewCurrent(cur)
+}
 
 function claimHost() {
   hostId.value = acquireFeedbackHost()
@@ -239,8 +313,103 @@ function onSheetCancel() {
   resolveActionSheet(-1)
 }
 
+function previewItemKey(url, idx) {
+  // 用消息引用做稳定 key，前置更早图片时勿带 idx，否则整表 remount 会抽搐
+  const item = state.preview.items?.[idx]
+  if (item && item.messageId != null) {
+    return `m${item.messageId}:${item.imageIndex ?? 0}`
+  }
+  const src = state.preview.sourceUrls?.[idx] || url || ''
+  return src || `u${idx}`
+}
+
+watch(
+  () => state.preview.show,
+  (show) => {
+    if (reachEarlierTimer) {
+      clearTimeout(reachEarlierTimer)
+      reachEarlierTimer = null
+    }
+    if (syncUnlockTimer) {
+      clearTimeout(syncUnlockTimer)
+      syncUnlockTimer = null
+    }
+    previewTouchLocked.value = false
+    swiperDuration.value = 280
+    syncGuardUntil = 0
+    userAnimating = false
+    if (show) {
+      // 先同步 index，再换 key 挂载，避免首帧停在 0
+      applyProgrammaticIndex(state.preview.current || 0)
+      previewSessionKey.value += 1
+      // 打开后等首帧停稳再预取，避免与挂载动画打架
+      setTimeout(() => {
+        if (state.preview.show && !userAnimating) {
+          scheduleReachEarlier(previewIndex.value)
+        }
+      }, 120)
+    } else {
+      previewIndex.value = 0
+      swiperBindCurrent.value = 0
+    }
+  }
+)
+
+watch(
+  () => state.preview.urls.length,
+  (len, prevLen) => {
+    if (!state.preview.show) return
+    // 只在相册结构变化时程序跳转；纯 current 变化来自手势，绝不能回写 :current
+    if (prevLen === undefined || len === prevLen) return
+    const token = beginAlbumSync()
+    nextTick(() => {
+      if (!state.preview.show) {
+        endAlbumSync(token)
+        return
+      }
+      applyProgrammaticIndex(state.preview.current)
+      endAlbumSync(token)
+    })
+  }
+)
+
+function scheduleReachEarlier(index) {
+  if (!state.preview.show) return
+  if (isAlbumSyncGuarding() || userAnimating) return
+  if (!state.preview.hasMoreEarlier || state.preview.loadingEarlier) return
+  if (index > 1) return
+  const now = Date.now()
+  // 快滑连翻时提高节流，避免边界预取打断动画
+  if (now - lastReachEarlierAt < 650) return
+  if (reachEarlierTimer) clearTimeout(reachEarlierTimer)
+  reachEarlierTimer = setTimeout(() => {
+    reachEarlierTimer = null
+    if (!state.preview.show || isAlbumSyncGuarding() || userAnimating) return
+    if (!state.preview.hasMoreEarlier || state.preview.loadingEarlier) return
+    if (previewIndex.value > 1) return
+    lastReachEarlierAt = Date.now()
+    Promise.resolve(requestPreviewReachEarlier()).catch(() => {})
+  }, 160)
+}
+
 function onPreviewChange(e) {
-  setPreviewCurrent(e.detail?.current ?? 0)
+  // 相册同步窗口内的 change 多为过期事件，写入会把 current 打回旧页并连环预取
+  if (isAlbumSyncGuarding()) return
+  const idx = e.detail?.current ?? 0
+  userAnimating = true
+  previewIndex.value = idx
+  setPreviewCurrent(idx)
+  // 故意不写 swiperBindCurrent，也不在 change 里预取更早图
+}
+
+function onPreviewAnimationFinish(e) {
+  if (isAlbumSyncGuarding()) return
+  const idx = e.detail?.current ?? previewIndex.value
+  userAnimating = false
+  previewIndex.value = idx
+  setPreviewCurrent(idx)
+  // 仅停稳后再考虑边界加载，快滑途中不打断
+  scheduleReachEarlier(idx)
 }
 
 function onPreviewClose() {
@@ -250,12 +419,58 @@ function onPreviewClose() {
 
 function onPreviewLongPress() {
   if (saving) return
+  const canForward = hasPreviewForwardHandler()
+  const itemList = canForward
+    ? ['转发', '添加表情', '保存图像']
+    : ['添加表情', '保存图像']
   showActionSheet({
-    itemList: ['保存图像'],
+    itemList,
     success: (res) => {
-      if (res.tapIndex === 0) saveCurrentImage()
+      if (canForward) {
+        if (res.tapIndex === 0) forwardCurrent()
+        else if (res.tapIndex === 1) addCurrentAsSticker()
+        else if (res.tapIndex === 2) saveCurrentImage()
+      } else if (res.tapIndex === 0) {
+        addCurrentAsSticker()
+      } else if (res.tapIndex === 1) {
+        saveCurrentImage()
+      }
     }
   })
+}
+
+function forwardCurrent() {
+  Promise.resolve(requestPreviewForward()).catch(() => {
+    toast({ title: '无法转发', icon: 'none' })
+  })
+}
+
+function currentPreviewSourceUrl() {
+  const idx = state.preview.current
+  const sources = state.preview.sourceUrls
+  if (Array.isArray(sources) && sources[idx]) return sources[idx]
+  return state.preview.urls[idx] || ''
+}
+
+async function addCurrentAsSticker() {
+  if (saving) return
+  const url = currentPreviewSourceUrl()
+  if (!url) {
+    toast({ title: '图片无效', icon: 'none' })
+    return
+  }
+  saving = true
+  showLoading({ title: '添加中', mask: true })
+  try {
+    await api.addSticker({ url })
+    hideLoading()
+    toast({ title: '已加入表情包', icon: 'none' })
+  } catch (e) {
+    hideLoading()
+    toast({ title: e?.message || '添加失败', icon: 'none' })
+  } finally {
+    saving = false
+  }
 }
 
 function downloadFile(url) {
@@ -651,6 +866,7 @@ async function saveCurrentImage() {
   display: flex;
   justify-content: center;
   pointer-events: none;
+  z-index: 2;
 }
 
 .pc-preview-indicator text {
@@ -662,20 +878,32 @@ async function saveCurrentImage() {
   border: 1px solid rgba(167, 139, 250, 0.28);
 }
 
-.pc-preview-hint {
+.pc-preview-loading {
   position: absolute;
+  top: calc(100rpx + env(safe-area-inset-top));
   left: 0;
   right: 0;
-  bottom: calc(48rpx + env(safe-area-inset-bottom));
   display: flex;
+  align-items: center;
   justify-content: center;
+  gap: 12rpx;
   pointer-events: none;
+  z-index: 2;
 }
 
-.pc-preview-hint text {
+.pc-preview-loading text {
   font-size: 22rpx;
-  color: rgba(245, 237, 255, 0.55);
-  letter-spacing: 1rpx;
+  color: rgba(245, 237, 255, 0.72);
+}
+
+.pc-preview-loading-spin {
+  width: 28rpx;
+  height: 28rpx;
+  border-radius: 50%;
+  border: 3rpx solid rgba(167, 139, 250, 0.2);
+  border-top-color: $pc-magenta;
+  border-right-color: $pc-purple;
+  animation: pc-spin 0.75s linear infinite;
 }
 
 /* ActionSheet —— 独立圆角块，贴近系统「保存图像 / 取消」形态 */

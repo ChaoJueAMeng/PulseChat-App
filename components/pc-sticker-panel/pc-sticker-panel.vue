@@ -6,7 +6,11 @@
       <view class="spacer"></view>
       <text class="link pc-press" @tap="emit('manage')">管理</text>
     </view>
-    <scroll-view scroll-y class="grid-wrap">
+    <scroll-view
+      scroll-y
+      class="grid-wrap"
+      :bounces="true"
+    >
       <view v-if="loading" class="empty">加载中…</view>
       <view v-else class="grid">
         <view class="cell add-cell pc-press" @tap="addStickers">
@@ -38,6 +42,7 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['pick', 'manage'])
+
 
 const list = ref([])
 const loading = ref(false)
@@ -99,7 +104,9 @@ function addStickers() {
 }
 
 watch(() => props.show, (v) => {
-  if (v) load()
+  if (v) {
+    load()
+  }
 })
 
 defineExpose({ reload: load })

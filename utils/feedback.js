@@ -38,7 +38,18 @@ export const feedbackState = reactive({
   preview: {
     show: false,
     urls: [],
-    current: 0
+    /** 与 urls 一一对应的原始地址（添加表情等接口用，避免本地缓存路径） */
+    sourceUrls: [],
+    /**
+     * 与 urls 一一对应的消息元数据（转发等用）
+     * [{ messageId, msgType, imageIndex, sourceUrl }]
+     */
+    items: [],
+    current: 0,
+    /** 会话中是否还有更早图片（未加载历史）可继续拉取 */
+    hasMoreEarlier: false,
+    /** 正在拉取更早历史中的图片 */
+    loadingEarlier: false
   }
 })
 
@@ -48,6 +59,15 @@ let sheetHandlers = null
 let patched = false
 let feedbackHostSeq = 0
 let activeFeedbackHost = 0
+/** 滑到相册更早边界时由业务页注入（如 chat 拉历史） */
+let previewReachEarlierHandler = null
+/** 预览长按「转发」时由业务页注入 */
+let previewForwardHandler = null
+
+function normalizePreviewItems(items, len) {
+  if (!Array.isArray(items) || items.length !== len) return []
+  return items.map((it) => (it && typeof it === 'object' ? { ...it } : null))
+}
 
 /** 仅当前页 pc-feedback 渲染浮层，避免 App 端多层原生 input 互相遮挡 */
 export function acquireFeedbackHost() {
@@ -191,6 +211,11 @@ export function resolveActionSheet(tapIndex) {
   }
 }
 
+function clampPreviewIndex(index, len) {
+  if (!len) return 0
+  return Math.min(Math.max(0, index), len - 1)
+}
+
 /** 主题化图片预览（替代原生 previewImage，避免系统白底菜单） */
 export function previewImage(options = {}) {
   const opts = options || {}
@@ -206,29 +231,140 @@ export function previewImage(options = {}) {
 
   let current = 0
   if (typeof opts.current === 'number') {
-    current = Math.min(Math.max(0, opts.current), urls.length - 1)
+    current = clampPreviewIndex(opts.current, urls.length)
   } else if (typeof opts.current === 'string' && opts.current) {
     const idx = urls.indexOf(opts.current)
     current = idx >= 0 ? idx : 0
   }
 
+  let sourceUrls = Array.isArray(opts.sourceUrls)
+    ? opts.sourceUrls.map((u) => String(u || ''))
+    : []
+  if (sourceUrls.length !== urls.length) {
+    sourceUrls = urls.slice()
+  }
+
+  if (typeof opts.onReachEarlier === 'function') {
+    previewReachEarlierHandler = opts.onReachEarlier
+  } else {
+    previewReachEarlierHandler = null
+  }
+  if (typeof opts.onForward === 'function') {
+    previewForwardHandler = opts.onForward
+  } else {
+    previewForwardHandler = null
+  }
+
   feedbackState.preview.urls = urls
+  feedbackState.preview.sourceUrls = sourceUrls
+  feedbackState.preview.items = normalizePreviewItems(opts.items, urls.length)
   feedbackState.preview.current = current
+  feedbackState.preview.hasMoreEarlier = !!opts.hasMoreEarlier
+  feedbackState.preview.loadingEarlier = false
   feedbackState.preview.show = true
   typeof opts.success === 'function' && opts.success({ errMsg: 'previewImage:ok' })
   typeof opts.complete === 'function' && opts.complete({ errMsg: 'previewImage:ok' })
 }
 
+/**
+ * 预览打开后动态更新相册（如滑到更早边界后插入历史图片）。
+ * 调用方负责校正 current，避免 swiper 跳动到错误页。
+ * 注意：urls 与 current 应同一次调用传入，便于预览组件批量同步。
+ */
+export function updatePreviewAlbum(options = {}) {
+  const opts = options || {}
+  if (!feedbackState.preview.show) return
+
+  if (Array.isArray(opts.urls)) {
+    const urls = opts.urls.map((u) => String(u || '')).filter(Boolean)
+    if (!urls.length) return
+    let sourceUrls = Array.isArray(opts.sourceUrls)
+      ? opts.sourceUrls.map((u) => String(u || ''))
+      : []
+    if (sourceUrls.length !== urls.length) {
+      sourceUrls = urls.slice()
+    }
+    const nextCurrent = typeof opts.current === 'number'
+      ? clampPreviewIndex(opts.current, urls.length)
+      : clampPreviewIndex(feedbackState.preview.current, urls.length)
+    // 同一同步回合内写完，减少 swiper 先吃到「新列表 + 旧 index」
+    feedbackState.preview.urls = urls
+    feedbackState.preview.sourceUrls = sourceUrls
+    if (Array.isArray(opts.items)) {
+      feedbackState.preview.items = normalizePreviewItems(opts.items, urls.length)
+    } else if (feedbackState.preview.items.length !== urls.length) {
+      feedbackState.preview.items = []
+    }
+    feedbackState.preview.current = nextCurrent
+  } else if (typeof opts.current === 'number') {
+    feedbackState.preview.current = clampPreviewIndex(
+      opts.current,
+      feedbackState.preview.urls.length
+    )
+  }
+
+  if (typeof opts.hasMoreEarlier === 'boolean') {
+    feedbackState.preview.hasMoreEarlier = opts.hasMoreEarlier
+  }
+  if (typeof opts.loadingEarlier === 'boolean') {
+    feedbackState.preview.loadingEarlier = opts.loadingEarlier
+  }
+  if (typeof opts.onReachEarlier === 'function') {
+    previewReachEarlierHandler = opts.onReachEarlier
+  }
+  if (typeof opts.onForward === 'function') {
+    previewForwardHandler = opts.onForward
+  }
+}
+
+export function setPreviewReachEarlierHandler(fn) {
+  previewReachEarlierHandler = typeof fn === 'function' ? fn : null
+}
+
+/** 由预览组件在滑近相册头部时调用 */
+export function requestPreviewReachEarlier() {
+  const fn = previewReachEarlierHandler
+  if (typeof fn !== 'function') return Promise.resolve()
+  return Promise.resolve().then(() => fn())
+}
+
+export function hasPreviewForwardHandler() {
+  return typeof previewForwardHandler === 'function'
+}
+
+/** 由预览组件长按「转发」时调用 */
+export function requestPreviewForward() {
+  const fn = previewForwardHandler
+  if (typeof fn !== 'function') return Promise.resolve()
+  const idx = feedbackState.preview.current
+  const item = Array.isArray(feedbackState.preview.items)
+    ? feedbackState.preview.items[idx]
+    : null
+  const sourceUrl = feedbackState.preview.sourceUrls?.[idx]
+    || feedbackState.preview.urls?.[idx]
+    || ''
+  const payload = item && typeof item === 'object'
+    ? { ...item, sourceUrl: item.sourceUrl || sourceUrl }
+    : { sourceUrl, messageId: null, msgType: null, imageIndex: 0 }
+  return Promise.resolve().then(() => fn(payload, idx))
+}
+
 export function closePreview() {
   feedbackState.preview.show = false
   feedbackState.preview.urls = []
+  feedbackState.preview.sourceUrls = []
+  feedbackState.preview.items = []
   feedbackState.preview.current = 0
+  feedbackState.preview.hasMoreEarlier = false
+  feedbackState.preview.loadingEarlier = false
+  previewReachEarlierHandler = null
+  previewForwardHandler = null
 }
 
 export function setPreviewCurrent(index) {
   const len = feedbackState.preview.urls.length
   if (!len) return
-  feedbackState.preview.current = Math.min(Math.max(0, index), len - 1)
+  feedbackState.preview.current = clampPreviewIndex(index, len)
 }
 
 /** 劫持原生 uni 提示 API，全应用自动走主题化 UI */
