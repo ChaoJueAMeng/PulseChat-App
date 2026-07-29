@@ -46,6 +46,7 @@
       <scroll-view
         scroll-y
         class="list"
+        :bounces="true"
         refresher-enabled
         :refresher-triggered="refreshing"
         :refresher-threshold="refresherThreshold"
@@ -56,42 +57,44 @@
         @refresherrestore="onRefresherRestore"
         @refresherabort="onRefresherRestore"
         @touchstart="onTabSwipeStart"
-        @touchend="onTabSwipeEnd"
+        @touchend="onListTouchEnd"
+        @touchcancel="onListTouchEnd"
       >
-        <template v-if="loading && !list.length">
-          <view v-for="i in 6" :key="'sk-' + i" class="skeleton"></view>
-        </template>
-        <view v-else-if="!list.length" class="empty">
-          <text class="empty-title">还没有对话</text>
-          <text class="empty-sub">去通讯录加好友，或直接和 Kimi 聊聊</text>
-        </view>
-        <view v-else-if="!filteredList.length" class="empty">
-          <text class="empty-title">未找到相关会话</text>
-          <text class="empty-sub">试试其他关键词</text>
-        </view>
-        <template v-else>
-          <view
-            v-for="item in filteredList"
-            :key="item.id"
-            class="row pc-card pc-press"
-            @tap="openChat(item)"
-            @longpress="onLong(item)"
-          >
-            <pc-avatar :url="item.avatar" :name="item.title" :size="96" :seed="item.id" :show-badge="showAiBadge(item)" />
-            <view class="meta">
-            <view class="line1">
-              <text class="title">{{ item.title }}</text>
-              <text v-if="isItemPinned(item)" class="pin-tag">置顶</text>
-              <text v-if="isItemMuted(item)" class="mute-tag">静音</text>
-              <text class="time">{{ formatTime(item.lastMsgAt) }}</text>
-            </view>
-              <view class="line2">
-                <text class="preview">{{ item.lastMsgPreview || '开始一段脉冲对话吧' }}</text>
-                <view v-if="item.unreadCount" class="badge">{{ item.unreadCount > 99 ? '99+' : item.unreadCount }}</view>
+
+          <template v-if="loading && !list.length">
+            <view v-for="i in 6" :key="'sk-' + i" class="skeleton"></view>
+          </template>
+          <view v-else-if="!list.length" class="empty">
+            <text class="empty-title">还没有对话</text>
+            <text class="empty-sub">去通讯录加好友，或直接和 Kimi 聊聊</text>
+          </view>
+          <view v-else-if="!filteredList.length" class="empty">
+            <text class="empty-title">未找到相关会话</text>
+            <text class="empty-sub">试试其他关键词</text>
+          </view>
+          <template v-else>
+            <view
+              v-for="item in filteredList"
+              :key="item.id"
+              class="row pc-card pc-press"
+              @tap="openChat(item)"
+              @longpress="onLong(item)"
+            >
+              <pc-avatar :url="item.avatar" :name="item.title" :size="96" :seed="item.id" :show-badge="showAiBadge(item)" />
+              <view class="meta">
+              <view class="line1">
+                <text class="title">{{ item.title }}</text>
+                <text v-if="isItemPinned(item)" class="pin-tag">置顶</text>
+                <text v-if="isItemMuted(item)" class="mute-tag">静音</text>
+                <text class="time">{{ formatTime(item.lastMsgAt) }}</text>
+              </view>
+                <view class="line2">
+                  <text class="preview" :class="{ 'preview-draft': !!item.draftText }">{{ conversationPreview(item) }}</text>
+                  <view v-if="item.unreadCount" class="badge">{{ item.unreadCount > 99 ? '99+' : item.unreadCount }}</view>
+                </view>
               </view>
             </view>
-          </view>
-        </template>
+          </template>
       </scroll-view>
     </view>
     <view v-if="showMenu" class="menu-mask" @tap="closeMenu"></view>
@@ -114,19 +117,19 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed } from 'vue'
 import { onShow, onBackPress } from '@dcloudio/uni-app'
 import { api } from '../../utils/request.js'
 import { getStore } from '../../store/index.js'
-import { onWs } from '../../utils/ws.js'
-import { sortConversations, isPinned, setPinned } from '../../utils/chat-settings.js'
+import { conversationPreview, sortConversations, isPinned, syncBackgroundFromDetail } from '../../utils/chat-settings.js'
 import { handleRootBackPress } from '../../utils/quit.js'
 import { useTabPageTransition } from '../../utils/tab-swipe.js'
 import PcAvatar from '../../components/pc-avatar/pc-avatar.vue'
 
 onBackPress(() => handleRootBackPress())
 const store = getStore()
-const list = ref([])
+/** 直接读 store，WS upsert 后列表即时刷新，避免本地 list 与 store 双份状态 */
+const list = computed(() => store.state.conversations || [])
 const loading = ref(false)
 const refreshing = ref(false)
 const pullDy = ref(0)
@@ -166,11 +169,19 @@ const showMenu = ref(false)
 const { tabAnimClass, onTabSwipeStart, onTabSwipeEnd } = useTabPageTransition(0, {
   shouldIgnore: () => showMenu.value || refreshing.value || isPulling.value
 })
+
+function onListTouchEnd(e) {
+  onTabSwipeEnd(e)
+  // refresher 偶发不回调 restore 时清掉残留，避免后续下拉“僵住”
+  if (!refreshing.value && isPulling.value) {
+    setTimeout(() => {
+      if (!refreshing.value) resetPullVisual()
+    }, 80)
+  }
+}
 const menuStyle = ref({})
 const sysInfo = uni.getSystemInfoSync()
 const statusBarHeight = ref(sysInfo.statusBarHeight || 20)
-let offs = []
-let syncTimer = null
 let pullRaf = 0
 let pendingPullDy = 0
 let loadGen = 0
@@ -209,24 +220,11 @@ const filteredList = computed(() => {
   if (!kw) return list.value
   return list.value.filter((item) => {
     const title = (item.title || '').toLowerCase()
-    const preview = (item.lastMsgPreview || '').toLowerCase()
+    const preview = conversationPreview(item).toLowerCase()
     const peerName = (item.peer?.nickname || '').toLowerCase()
     return title.includes(kw) || preview.includes(kw) || peerName.includes(kw)
   })
 })
-
-/** 从 store 同步列表，避免每条 WS 都打 HTTP */
-function syncFromStore() {
-  list.value = store.state.conversations || []
-}
-
-function scheduleSyncFromStore() {
-  if (syncTimer) return
-  syncTimer = setTimeout(() => {
-    syncTimer = null
-    syncFromStore()
-  }, 80)
-}
 
 function resetPullVisual() {
   if (pullRaf) {
@@ -238,14 +236,64 @@ function resetPullVisual() {
   if (!refreshing.value) pullDy.value = 0
 }
 
+/** HTTP 刷新时保留 store 里更新的会话摘要，避免在途请求覆盖刚到的 WS */
+function mergeConversations(fromApi, fromStore) {
+  const storeMap = new Map((fromStore || []).map((c) => [Number(c.id), c]))
+  const watermark = store.state.readWatermark || {}
+  const merged = (fromApi || []).map((c) => {
+    const id = Number(c.id)
+    const s = storeMap.get(id)
+    let result = c
+    if (s) {
+      const apiMsg = Number(c.lastMsgId) || 0
+      const storeMsg = Number(s.lastMsgId) || 0
+      const apiDraftAt = Number(c.draftUpdatedAt) || 0
+      const storeDraftAt = Number(s.draftUpdatedAt) || 0
+      const apiPinnedAt = Number(c.pinnedAt) || 0
+      const storePinnedAt = Number(s.pinnedAt) || 0
+      // store 更新则整份保留（含 unread）；已读后 lastMsgId 相同，会走 API 的 unread=0
+      if (storeMsg > apiMsg) result = { ...c, ...s }
+      // 撤回不改 lastMsgId，仅改 preview：同 id 时保留「消息已撤回」，避免陈旧列表请求盖回原文
+      else if (storeMsg === apiMsg && s.lastMsgPreview === '消息已撤回' && c.lastMsgPreview !== '消息已撤回') {
+        result = { ...c, lastMsgPreview: s.lastMsgPreview }
+      }
+      if (storeDraftAt > apiDraftAt) {
+        result = {
+          ...result,
+          draftText: s.draftText,
+          draftAtUserIds: s.draftAtUserIds,
+          draftUpdatedAt: s.draftUpdatedAt
+        }
+      }
+      if (storePinnedAt > apiPinnedAt || (storePinnedAt === 0 && apiPinnedAt > 0 && !Number(s.pinned))) {
+        result = {
+          ...result,
+          pinned: s.pinned,
+          pinnedAt: s.pinnedAt
+        }
+      }
+    }
+    // 本地已读水位已覆盖最新消息时，即使 API 尚未清零也不显示红点
+    const lastMsgId = Number(result.lastMsgId) || 0
+    const wm = Number(watermark[id]) || 0
+    if (lastMsgId > 0 && wm >= lastMsgId && (Number(result.unreadCount) || 0) > 0) {
+      result = { ...result, unreadCount: 0 }
+    }
+    return result
+  })
+  return sortConversations(merged)
+}
+
 async function load() {
   const gen = ++loadGen
   loading.value = true
   try {
     const data = await api.conversations()
     if (gen !== loadGen) return
-    list.value = sortConversations(data || [])
-    store.setConversations(list.value)
+    ;(data || []).forEach((c) => {
+      if (c && c.id != null) syncBackgroundFromDetail(c.id, c)
+    })
+    store.setConversations(mergeConversations(data || [], store.state.conversations))
   } catch (e) {
   } finally {
     if (gen !== loadGen) return
@@ -321,15 +369,18 @@ function onMenuSelect(key) {
 }
 
 function applyList(next) {
-  list.value = sortConversations(next || [])
-  store.setConversations(list.value)
+  store.setConversations(sortConversations(next || []))
 }
 
-function togglePin(item) {
-  const next = !isPinned(item.id)
-  setPinned(item.id, next)
-  applyList(list.value)
-  uni.showToast({ title: next ? '已置顶' : '已取消置顶', icon: 'none' })
+async function togglePin(item) {
+  const next = !isPinned(item)
+  try {
+    const updated = await api.updateConvSettings(item.id, { pinned: next ? 1 : 0 })
+    store.upsertConversation(updated || { ...item, pinned: next ? 1 : 0, pinnedAt: next ? Date.now() : null })
+    uni.showToast({ title: next ? '已置顶' : '已取消置顶', icon: 'none' })
+  } catch (e) {
+    uni.showToast({ title: e?.message || '设置失败', icon: 'none' })
+  }
 }
 
 async function toggleNotify(item) {
@@ -348,7 +399,7 @@ async function toggleNotify(item) {
 }
 
 function onLong(item) {
-  const pinned = isPinned(item.id)
+  const pinned = isPinned(item)
   const muted = !!(item.muted ?? item.mute)
   uni.showActionSheet({
     itemList: [
@@ -360,6 +411,7 @@ function onLong(item) {
     success: async (res) => {
       if (res.tapIndex === 0) {
         await api.markRead(item.id)
+        store.markConversationReadLocal(item.id, item.lastMsgId)
         load()
       } else if (res.tapIndex === 1) {
         togglePin(item)
@@ -391,7 +443,7 @@ function formatTime(t) {
   return h + ':' + m
 }
 function isItemPinned(item) {
-  return isPinned(item.id)
+  return isPinned(item)
 }
 function isItemMuted(item) {
   return !!(item.muted ?? item.mute)
@@ -399,28 +451,8 @@ function isItemMuted(item) {
 
 onShow(() => {
   try { uni.hideTabBar({ animation: false }) } catch (e) {}
-  // 有缓存先展示，再后台刷新，减少切 Tab 白屏等待
-  if (store.state.conversations?.length && !list.value.length) {
-    syncFromStore()
-  }
+  // store 已有缓存时直接展示；后台刷新对齐服务端
   load()
-})
-onMounted(() => {
-  // notify 已 upsert store，这里只做本地同步，禁止每条消息 HTTP 全量拉取
-  offs.push(onWs('notify', (body) => {
-    if (body?.type === 'conversation_updated') {
-      scheduleSyncFromStore()
-    }
-  }))
-  offs.push(onWs('connected', () => {
-    scheduleSyncFromStore()
-  }))
-})
-onUnmounted(() => {
-  offs.forEach((fn) => fn && fn())
-  offs = []
-  clearTimeout(syncTimer)
-  clearTimeout(pullRaf)
 })
 </script>
 
@@ -598,6 +630,7 @@ onUnmounted(() => {
   margin-top: 12rpx; font-size: 24rpx; color: $pc-muted;
   overflow: hidden; white-space: nowrap; text-overflow: ellipsis; max-width: 420rpx;
 }
+.preview-draft { color: #F9A8D4; }
 .badge {
   min-width: 34rpx; height: 34rpx; padding: 0 10rpx; border-radius: $pc-radius-pill;
   background: linear-gradient(135deg, $pc-rose, $pc-red);
