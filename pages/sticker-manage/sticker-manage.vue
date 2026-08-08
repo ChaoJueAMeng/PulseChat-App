@@ -18,12 +18,15 @@
     </view>
 
     <scroll-view
-      scroll-y
       class="body"
-      :bounces="true"
+      :scroll-y="!dragging"
+      :bounces="!dragging"
+      @touchmove="onDragMove"
+      @touchend="onDragEnd"
+      @touchcancel="onDragEnd"
     >
       <view class="toolbar pc-card">
-        <text class="tip">{{ list.length }}/{{ max }} · 点击可置顶或删除，编辑可多选</text>
+        <text class="tip">{{ list.length }}/{{ max }} · 长按拖动排序，点击可置顶或删除，编辑可多选</text>
         <view class="toolbar-actions">
           <view class="btn pc-press" @tap="batchAdd">
             <text>批量添加</text>
@@ -49,7 +52,11 @@
           v-for="(s, index) in list"
           :key="s.id"
           class="cell"
-          :class="{ selected: isSelected(s.id) }"
+          :class="{
+            selected: isSelected(s.id),
+            dragging: dragging && dragFrom === index,
+            'drag-over': dragging && dragOver === index && dragOver !== dragFrom
+          }"
           @tap="onTap(s, index)"
           @longpress="onLongPress(s, index)"
         >
@@ -66,11 +73,15 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, nextTick, getCurrentInstance } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
 import { api } from '../../utils/request.js'
 import { fullUrl } from '../../utils/url.js'
-import { MAX_USER_STICKERS } from '../../utils/sticker.js'
+import {
+  MAX_USER_STICKERS,
+  batchUploadStickers,
+  formatStickerAddToast
+} from '../../utils/sticker.js'
 
 
 const list = ref([])
@@ -82,6 +93,14 @@ const max = MAX_USER_STICKERS
 const statusBarHeight = uni.getSystemInfoSync().statusBarHeight || 20
 const headerStyle = computed(() => ({ paddingTop: statusBarHeight + 'px' }))
 const selectedCount = computed(() => Object.keys(selectedMap.value).length)
+
+const dragging = ref(false)
+const dragFrom = ref(-1)
+const dragOver = ref(-1)
+const dragChanged = ref(false)
+let suppressTap = false
+let cellRects = []
+const instance = getCurrentInstance()
 
 function mediaUrl(url) {
   return fullUrl(url)
@@ -105,11 +124,13 @@ function goBack() {
 }
 
 function toggleEdit() {
+  if (dragging.value) return
   editing.value = !editing.value
   clearSelected()
 }
 
 async function load() {
+  if (dragging.value) return
   loading.value = true
   try {
     list.value = (await api.stickers()) || []
@@ -122,6 +143,7 @@ async function load() {
 }
 
 function onTap(s, index) {
+  if (suppressTap || dragging.value) return
   if (editing.value) {
     const next = { ...selectedMap.value }
     if (next[s.id]) delete next[s.id]
@@ -134,8 +156,7 @@ function onTap(s, index) {
 
 function onLongPress(s, index) {
   if (editing.value) return
-  try { uni.vibrateShort && uni.vibrateShort({ type: 'light' }) } catch (err) {}
-  openItemActions(s, index)
+  startDrag(index)
 }
 
 function openItemActions(s, index) {
@@ -185,6 +206,78 @@ function removeOne(s) {
   })
 }
 
+function measureCells() {
+  return new Promise((resolve) => {
+    const proxy = instance?.proxy
+    const query = uni.createSelectorQuery()
+    if (proxy) query.in(proxy)
+    query.selectAll('.grid .cell').boundingClientRect()
+    query.exec((res) => {
+      const rects = res && res[0]
+      cellRects = Array.isArray(rects) ? rects : []
+      resolve(cellRects)
+    })
+  })
+}
+
+async function startDrag(index) {
+  if (dragging.value || index < 0) return
+  dragging.value = true
+  dragFrom.value = index
+  dragOver.value = index
+  dragChanged.value = false
+  try { uni.vibrateShort && uni.vibrateShort({ type: 'light' }) } catch (err) {}
+  await nextTick()
+  await measureCells()
+}
+
+function findCellIndexAt(x, y) {
+  for (let i = 0; i < cellRects.length; i++) {
+    const r = cellRects[i]
+    if (!r) continue
+    if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return i
+  }
+  return -1
+}
+
+function onDragMove(e) {
+  if (!dragging.value) return
+  const touch = e.touches?.[0] || e.changedTouches?.[0]
+  if (!touch) return
+  const x = touch.clientX != null ? touch.clientX : touch.pageX
+  const y = touch.clientY != null ? touch.clientY : touch.pageY
+  const target = findCellIndexAt(x, y)
+  if (target < 0 || target === dragFrom.value) return
+  const arr = list.value.slice()
+  const from = dragFrom.value
+  const [item] = arr.splice(from, 1)
+  arr.splice(target, 0, item)
+  list.value = arr
+  dragFrom.value = target
+  dragOver.value = target
+  dragChanged.value = true
+  nextTick(() => measureCells())
+}
+
+async function onDragEnd() {
+  if (!dragging.value) return
+  const changed = dragChanged.value
+  dragging.value = false
+  dragFrom.value = -1
+  dragOver.value = -1
+  cellRects = []
+  if (!changed) return
+  suppressTap = true
+  setTimeout(() => { suppressTap = false }, 350)
+  try {
+    const ids = list.value.map(x => x.id)
+    list.value = (await api.reorderStickers(ids)) || list.value
+  } catch (e) {
+    uni.showToast({ title: e?.message || '排序失败', icon: 'none' })
+    await load()
+  }
+}
+
 async function batchAdd() {
   const remain = max - list.value.length
   if (remain <= 0) {
@@ -199,16 +292,16 @@ async function batchAdd() {
       if (!paths.length) return
       uni.showLoading({ title: '上传中', mask: true })
       try {
-        const items = []
-        for (const p of paths) {
-          if (list.value.length + items.length >= max) break
-          const up = await api.upload(p, { category: 'sticker' })
-          if (up?.url) items.push({ url: up.url })
+        const { created, added, skipped } = await batchUploadStickers(api, res, {
+          currentCount: list.value.length,
+          max
+        })
+        if (!added) {
+          uni.showToast({ title: formatStickerAddToast(0, skipped), icon: 'none' })
+          return
         }
-        if (!items.length) throw new Error('上传失败')
-        const created = await api.batchAddStickers(items)
-        list.value = [...(created || []), ...list.value]
-        uni.showToast({ title: '已添加 ' + items.length + ' 个', icon: 'none' })
+        list.value = [...created, ...list.value]
+        uni.showToast({ title: formatStickerAddToast(added, skipped), icon: 'none' })
       } catch (e) {
         uni.showToast({ title: e?.message || '添加失败', icon: 'none' })
         await load()
@@ -327,6 +420,17 @@ onShow(load)
   &.selected .img {
     box-shadow: 0 0 0 3rpx rgba(167, 139, 250, 0.7);
   }
+  &.dragging {
+    opacity: 0.72;
+    z-index: 2;
+    .img {
+      transform: scale(1.06);
+      box-shadow: 0 8rpx 24rpx rgba(124, 58, 237, 0.28);
+    }
+  }
+  &.drag-over .img {
+    box-shadow: 0 0 0 3rpx rgba(167, 139, 250, 0.85);
+  }
 }
 .img {
   width: 100%;
@@ -334,6 +438,7 @@ onShow(load)
   border-radius: 14rpx;
   background: rgba(28, 16, 48, 0.88);
   border: 1px solid rgba(167, 139, 250, 0.14);
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
 }
 .check {
   position: absolute;

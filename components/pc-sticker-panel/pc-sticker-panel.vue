@@ -35,7 +35,11 @@
 import { ref, watch } from 'vue'
 import { api } from '../../utils/request.js'
 import { fullUrl } from '../../utils/url.js'
-import { MAX_USER_STICKERS } from '../../utils/sticker.js'
+import {
+  MAX_USER_STICKERS,
+  batchUploadStickers,
+  formatStickerAddToast
+} from '../../utils/sticker.js'
 
 const props = defineProps({
   show: { type: Boolean, default: false }
@@ -83,16 +87,16 @@ function addStickers() {
       if (!paths.length) return
       uni.showLoading({ title: '上传中', mask: true })
       try {
-        const items = []
-        for (const p of paths) {
-          if (list.value.length + items.length >= max) break
-          const up = await api.upload(p, { category: 'sticker' })
-          if (up?.url) items.push({ url: up.url })
+        const { created, added, skipped } = await batchUploadStickers(api, res, {
+          currentCount: list.value.length,
+          max
+        })
+        if (!added) {
+          uni.showToast({ title: formatStickerAddToast(0, skipped), icon: 'none' })
+          return
         }
-        if (!items.length) throw new Error('上传失败')
-        const created = await api.batchAddStickers(items)
-        list.value = [...(created || []), ...list.value]
-        uni.showToast({ title: '已添加 ' + items.length + ' 个', icon: 'none' })
+        list.value = [...created, ...list.value]
+        uni.showToast({ title: formatStickerAddToast(added, skipped), icon: 'none' })
       } catch (e) {
         uni.showToast({ title: e?.message || '添加失败', icon: 'none' })
         await load()
