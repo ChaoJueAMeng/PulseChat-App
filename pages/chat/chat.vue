@@ -1,5 +1,13 @@
 <template>
-  <view class="chat-page pc-aurora" :style="pageStyle" @touchstart="onOutsideMenuTouch">
+  <view class="chat-root">
+  <view
+    class="chat-page pc-aurora"
+    :style="pageStyle"
+    @touchstart="onChatSwipeStart"
+    @touchmove="onChatSwipeMove"
+    @touchend="onChatSwipeEnd"
+    @touchcancel="onChatSwipeCancel"
+  >
     <view class="nav-bar pc-nav-bar" :style="navBarWrapStyle">
       <view class="nav-inner" :style="navInnerStyle">
         <view class="nav-back pc-press" @tap="goBack">
@@ -18,7 +26,7 @@
 
     <view v-if="!connected" class="banner">网络波动，正在重连脉冲通道…</view>
     <view v-else-if="convType === 1 && peer && !peer.bot && !isFriend" class="banner warn">你们已不是好友，无法发送新消息</view>
-    <view v-else-if="isAiPrivate && messages.length === 0" class="banner tip">可以直接发图片，Kimi 会识别并回应</view>
+    <view v-else-if="isAiPrivate && messages.length === 0" class="banner tip">可以直接发图片或语音，Kimi 会识别并回应</view>
     <scroll-view
       scroll-y
       class="msgs"
@@ -29,6 +37,10 @@
       :upper-threshold="LOAD_MORE_THRESHOLD"
       @scroll="onScroll"
       @scrolltoupper="loadMore"
+      @touchstart="onChatSwipeStart"
+      @touchmove="onChatSwipeMove"
+      @touchend="onChatSwipeEnd"
+      @touchcancel="onChatSwipeCancel"
     >
       <view class="msgs-inner">
         <view v-if="!hasMoreHistory && messages.length" class="history-end">没有更早的消息了</view>
@@ -115,16 +127,19 @@
                 <view v-else-if="m.msgType === MSG_EMOJI" class="img-fallback sticker-fallback" @tap="retryMedia(m)">
                   <text class="img-fallback-text">表情加载失败</text>
                 </view>
-                <view v-else-if="m.msgType === MSG_VOICE" class="voice-bubble pc-press" @tap="togglePlayVoice(m)">
-                  <view class="voice-play" :class="{ playing: playingId === m.id, mine: m.mine }">
-                    <text class="voice-play-icon">{{ playingId === m.id ? '❚❚' : '▶' }}</text>
-                  </view>
-                  <view class="voice-body">
-                    <view class="voice-bars" :class="{ anim: playingId === m.id }">
-                      <view v-for="i in 4" :key="i" class="voice-bar" :style="{ animationDelay: (i * 0.12) + 's' }"></view>
+                <view v-else-if="m.msgType === MSG_VOICE" class="voice-wrap">
+                  <view class="voice-bubble pc-press" @tap="togglePlayVoice(m)">
+                    <view class="voice-play" :class="{ playing: playingId === m.id, mine: m.mine }">
+                      <text class="voice-play-icon">{{ playingId === m.id ? '❚❚' : '▶' }}</text>
                     </view>
-                    <text class="voice-dur">{{ voiceDurationText(m) }}</text>
+                    <view class="voice-body">
+                      <view class="voice-bars" :class="{ anim: playingId === m.id }">
+                        <view v-for="i in 4" :key="i" class="voice-bar" :style="{ animationDelay: (i * 0.12) + 's' }"></view>
+                      </view>
+                      <text class="voice-dur">{{ voiceDurationText(m) }}</text>
+                    </view>
                   </view>
+                  <text v-if="voiceTranscriptOf(m)" class="voice-transcript" :class="{ mine: m.mine }">{{ voiceTranscriptOf(m) }}</text>
                 </view>
                 <text v-else class="txt">{{ m.content }}</text>
                 <text v-if="m.streaming" class="cursor">▍</text>
@@ -332,6 +347,30 @@
       </view>
     </view>
   </view>
+
+  <!-- 同页「更多」侧滑层：预挂载 + CSS 跟手，避免 navigateTo 整页卡顿 -->
+  <view
+    v-if="moreMounted"
+    class="chat-more-layer pc-aurora"
+    :style="moreLayerStyle"
+  >
+    <pc-chat-more-panel
+      :conversation-id="conversationId"
+      :initial-title="title"
+      :active="moreMounted"
+      :visible="moreOpen"
+      :refresh-seq="moreRefreshSeq"
+      embedded
+      @close="closeMorePanel"
+      @exit-chat="exitChatFromMore"
+      @background-changed="onMoreBgChanged"
+      @swipe-start="onMoreSwipeStart"
+      @swipe-move="onMoreSwipeMove"
+      @swipe-end="onMoreSwipeEnd"
+      @swipe-cancel="onMoreSwipeCancel"
+    />
+  </view>
+  </view>
   <pc-feedback />
 </template>
 
@@ -344,7 +383,7 @@ import { getDisplayUrl, ensureCached, prefetchAll, forgetCached, cacheLocalAs, i
 import { getStore } from '../../store/index.js'
 import { subscribeConversation, onWs, sendStomp } from '../../utils/ws.js'
 import { getBackground, syncBackgroundFromDetail } from '../../utils/chat-settings.js'
-import { MSG_VOICE, parseVoiceExtra, formatVoiceDuration } from '../../utils/voice.js'
+import { MSG_VOICE, parseVoiceExtra, formatVoiceDuration, voiceTranscriptText } from '../../utils/voice.js'
 import { MSG_EMOJI } from '../../utils/sticker.js'
 import {
   getReplyMeta,
@@ -365,10 +404,28 @@ import {
   setPreviewReachEarlierHandler,
   closePreview
 } from '../../utils/feedback.js'
+import {
+  TAB_SWIPE_LEAVE_MS,
+  TAB_SWIPE_ENTER_MS,
+  SWIPE_AXIS_LOCK_PX,
+  SWIPE_FOLLOW_FACTOR,
+  SWIPE_COMMIT_RATIO,
+  SWIPE_SCREEN_COMMIT_RATIO,
+  SWIPE_EASING_ENTER,
+  SWIPE_EASING_LEAVE,
+  SWIPE_EASING_CANCEL,
+  SWIPE_VX_SAMPLE_MS,
+  resolveSwipeAxis,
+  tryPreventTouchScroll,
+  shouldCommitHorizontalSwipe,
+  createRafBatch,
+  requestMainTab
+} from '../../utils/tab-swipe.js'
 import PcEmojiPanel from '../../components/pc-emoji-panel/pc-emoji-panel.vue'
 import PcStickerPanel from '../../components/pc-sticker-panel/pc-sticker-panel.vue'
 import PcMsgMenu from '../../components/pc-msg-menu/pc-msg-menu.vue'
 import PcAvatar from '../../components/pc-avatar/pc-avatar.vue'
+import PcChatMorePanel from '../../components/pc-chat-more-panel/pc-chat-more-panel.vue'
 
 const instance = getCurrentInstance()
 
@@ -387,6 +444,10 @@ onBackPress(() => {
   }
   if (replyTarget.value) {
     clearReply()
+    return true
+  }
+  if (moreOpen.value || morePhase.value === 'follow' || morePhase.value === 'open') {
+    closeMorePanel()
     return true
   }
   return handlePageBackPress()
@@ -484,6 +545,9 @@ let recorder = null
 let recordStartY = 0
 let recordStartTime = 0
 let voiceWillSend = false
+/** 按住说话时并行识别的文稿（后端 ASR 的补充） */
+let liveVoiceTranscript = ''
+let h5SpeechRec = null
 let audioCtx = null
 let readMarkTimer = null
 let lastMarkedMsgId = 0
@@ -540,15 +604,190 @@ const composerWrapStyle = computed(() => {
   return { paddingBottom: '12px' }
 })
 
-const pageStyle = computed(() => {
-  if (!chatBgDisplay.value) return {}
-  const url = chatBgDisplay.value
-  return {
-    backgroundImage: `linear-gradient(165deg, rgba(10,6,20,0.72), rgba(26,11,40,0.78)), url("${url}")`,
-    backgroundSize: 'cover',
-    backgroundPosition: 'center'
+/** 与侧栏 / utils/tab-swipe 手感对齐；会话↔更多用同页叠层跟手，退出列表仍 leave 后 navigateBack */
+const CHAT_SWIPE_AXIS_LOCK_PX = SWIPE_AXIS_LOCK_PX
+const CHAT_SWIPE_FOLLOW_FACTOR = SWIPE_FOLLOW_FACTOR
+/** 右滑退出：达到屏宽该比例即可提交（≈ 侧栏 0.35×0.78） */
+const CHAT_SWIPE_LEAVE_RATIO = SWIPE_SCREEN_COMMIT_RATIO
+/** 右滑跟手视觉上限（相对屏宽）；超出后橡胶阻尼，避免硬顶死 */
+const CHAT_SWIPE_FOLLOW_MAX_RATIO = 0.52
+const CHAT_SWIPE_RUBBER = 0.18
+const CHAT_SWIPE_LEAVE_MS = TAB_SWIPE_LEAVE_MS
+const CHAT_SWIPE_ENTER_MS = TAB_SWIPE_ENTER_MS
+const CHAT_SWIPE_CANCEL_MS = 150
+/** 打开更多时会话层轻微左移（对齐主 Tab leave 约 22%） */
+const CHAT_MORE_PARALLAX = 0.22
+/** 瞬时速度采样窗口（ms），松手判定用近期速度而非全程均值 */
+const CHAT_SWIPE_VX_SAMPLE_MS = SWIPE_VX_SAMPLE_MS
+/** 更多层 settle 比例，对齐侧栏 DRAWER_OPEN_RATIO */
+const CHAT_MORE_COMMIT_RATIO = SWIPE_COMMIT_RATIO
+const CHAT_EASING_ENTER = SWIPE_EASING_ENTER
+const CHAT_EASING_LEAVE = SWIPE_EASING_LEAVE
+const CHAT_EASING_CANCEL = SWIPE_EASING_CANCEL
+
+const swipeOffset = ref(0)
+const swipeOpacity = ref(1)
+/** '' | 'follow' | 'leave' | 'cancel' —— 手势轴用 plain 变量，避免轴锁触发多余渲染 */
+const swipePhase = ref('')
+let swipeAxis = '' // '' | 'h' | 'v'
+let swipeStartX = 0
+let swipeStartY = 0
+let swipeStartAt = 0
+let swipeTracking = false
+let swipeNavigating = false
+let swipeLeaveTimer = null
+let swipeWindowWidth = 0
+/** 去重：scroll-view 与页面根节点在 H5 可能各触发一次同戳 touch */
+let swipeStartStamp = -1
+let swipeMoveStamp = -1
+let swipeSampleX = 0
+let swipeSampleAt = 0
+let swipeRecentVx = 0
+
+/** 同页「更多」侧滑层 */
+const moreMounted = ref(false)
+const moreOpen = ref(false)
+const moreRefreshSeq = ref(0)
+/** 相对打开位置的位移：0=全开，+windowWidth=关在右侧 */
+const moreOffset = ref(0)
+/** '' | 'follow' | 'open' | 'close' */
+const morePhase = ref('')
+let moreAnimTimer = null
+let moreSwipeTracking = false
+let moreSwipeStartX = 0
+let moreSwipeStartY = 0
+let moreSwipeStartAt = 0
+let moreSwipeAxis = ''
+let moreSwipeBase = 0
+let moreStartStamp = -1
+let moreMoveStamp = -1
+let moreSampleX = 0
+let moreSampleAt = 0
+let moreRecentVx = 0
+
+/** 跟手：同帧多次 touchmove 合并为一次写 ref，避免 App 桥接掉帧 */
+const chatFollowBatch = createRafBatch((payload) => {
+  if (payload.chatX != null && swipeOffset.value !== payload.chatX) {
+    swipeOffset.value = payload.chatX
+  }
+  if (payload.chatOp != null && swipeOpacity.value !== payload.chatOp) {
+    swipeOpacity.value = payload.chatOp
+  }
+  if (payload.phase != null && swipePhase.value !== payload.phase) {
+    swipePhase.value = payload.phase
+  }
+  if (payload.moreX != null && moreOffset.value !== payload.moreX) {
+    moreOffset.value = payload.moreX
+  }
+  if (payload.morePhase != null && morePhase.value !== payload.morePhase) {
+    morePhase.value = payload.morePhase
   }
 })
+
+function getSwipeWindowWidth() {
+  if (swipeWindowWidth > 0) return swipeWindowWidth
+  try {
+    swipeWindowWidth = uni.getSystemInfoSync().windowWidth || 375
+  } catch (e) {
+    swipeWindowWidth = 375
+  }
+  return swipeWindowWidth
+}
+
+function clearSwipeLeaveTimer() {
+  if (!swipeLeaveTimer) return
+  clearTimeout(swipeLeaveTimer)
+  swipeLeaveTimer = null
+}
+
+function clearMoreAnimTimer() {
+  if (!moreAnimTimer) return
+  clearTimeout(moreAnimTimer)
+  moreAnimTimer = null
+}
+
+function ensureMoreMounted() {
+  if (moreMounted.value) return
+  if (!conversationId.value) return
+  moreMounted.value = true
+  moreOffset.value = getSwipeWindowWidth()
+  morePhase.value = ''
+  moreOpen.value = false
+}
+
+const pageStyle = computed(() => {
+  const style = {}
+  if (chatBgDisplay.value) {
+    const url = chatBgDisplay.value
+    style.backgroundImage = `linear-gradient(165deg, rgba(10,6,20,0.72), rgba(26,11,40,0.78)), url("${url}")`
+    style.backgroundSize = 'cover'
+    style.backgroundPosition = 'center'
+  }
+  const phase = swipePhase.value
+  if (phase || swipeOffset.value) {
+    style.transform = `translate3d(${swipeOffset.value}px,0,0)`
+    style.opacity = swipeOpacity.value
+    if (phase === 'follow') {
+      style.transition = 'none'
+      style.willChange = 'transform'
+    } else if (phase === 'leave') {
+      style.transition = `transform ${CHAT_SWIPE_LEAVE_MS}ms ${CHAT_EASING_LEAVE}, opacity ${CHAT_SWIPE_LEAVE_MS}ms ${CHAT_EASING_LEAVE}`
+    } else if (phase === 'cancel') {
+      style.transition = `transform ${CHAT_SWIPE_CANCEL_MS}ms ${CHAT_EASING_CANCEL}, opacity ${CHAT_SWIPE_CANCEL_MS}ms ${CHAT_EASING_CANCEL}`
+    }
+  }
+  return style
+})
+
+const moreLayerStyle = computed(() => {
+  const w = getSwipeWindowWidth()
+  const x = moreMounted.value ? moreOffset.value : w
+  // 关闭动画中不可点；会话侧跟手打开时 moreOpen 仍为 false，保持 none 以免抢走 touch
+  const interactive = moreOpen.value && morePhase.value !== 'close'
+  const style = {
+    transform: `translate3d(${x}px,0,0)`,
+    pointerEvents: interactive ? 'auto' : 'none'
+  }
+  if (morePhase.value === 'follow') {
+    style.transition = 'none'
+    style.willChange = 'transform'
+  } else if (morePhase.value === 'open') {
+    style.transition = `transform ${CHAT_SWIPE_ENTER_MS}ms ${CHAT_EASING_ENTER}`
+  } else if (morePhase.value === 'close') {
+    style.transition = `transform ${CHAT_SWIPE_LEAVE_MS}ms ${CHAT_EASING_LEAVE}`
+  }
+  return style
+})
+
+function touchStampOf(e) {
+  const t = Number(e?.timeStamp)
+  return Number.isFinite(t) ? t : -1
+}
+
+function noteSwipeSample(x) {
+  const now = Date.now()
+  const dt = now - swipeSampleAt
+  if (dt > 0 && dt <= CHAT_SWIPE_VX_SAMPLE_MS * 3) {
+    swipeRecentVx = Math.abs(x - swipeSampleX) / dt
+  }
+  swipeSampleX = x
+  swipeSampleAt = now
+}
+
+function noteMoreSample(x) {
+  const now = Date.now()
+  const dt = now - moreSampleAt
+  if (dt > 0 && dt <= CHAT_SWIPE_VX_SAMPLE_MS * 3) {
+    moreRecentVx = Math.abs(x - moreSampleX) / dt
+  }
+  moreSampleX = x
+  moreSampleAt = now
+}
+
+function rubberFollow(raw, max) {
+  if (raw <= max) return raw
+  return max + (raw - max) * CHAT_SWIPE_RUBBER
+}
 
 function applyKeyboardHeight(height) {
   const h = Math.max(0, Math.round(Number(height) || 0))
@@ -752,13 +991,534 @@ function initNavBarLayout(sys) {
   // #endif
 }
 
-function goBack() {
+function goBack(navOpts) {
+  const useCustomAnim = navOpts && typeof navOpts === 'object' && typeof navOpts.animationType === 'string'
   const pages = getCurrentPages()
   if (pages.length > 1) {
-    uni.navigateBack()
+    if (useCustomAnim) {
+      uni.navigateBack({
+        animationType: navOpts.animationType,
+        animationDuration: navOpts.animationDuration ?? 0
+      })
+    } else {
+      uni.navigateBack()
+    }
   } else {
     uni.switchTab({ url: '/pages/chats/chats' })
   }
+}
+
+function shouldIgnoreChatSwipe() {
+  return !!(
+    swipeNavigating
+    || moreOpen.value
+    || morePhase.value === 'open'
+    || morePhase.value === 'close'
+    || recording.value
+    || showEditor.value
+    || showForward.value
+    || menuMsg.value
+    || keyboardHeight.value > 0
+  )
+}
+
+function resetChatSwipeVisual() {
+  chatFollowBatch.cancel()
+  swipeOffset.value = 0
+  swipeOpacity.value = 1
+  swipePhase.value = ''
+  swipeAxis = ''
+}
+
+function resetChatSwipe() {
+  clearSwipeLeaveTimer()
+  swipeTracking = false
+  resetChatSwipeVisual()
+}
+
+function bounceChatSwipeBack() {
+  chatFollowBatch.flush()
+  clearSwipeLeaveTimer()
+  swipeTracking = false
+  const fromChat = swipeOffset.value
+  const fromOpacity = swipeOpacity.value
+  const fromMore = moreOffset.value
+  const bouncingMore = morePhase.value === 'follow' && !moreOpen.value
+  swipePhase.value = 'cancel'
+  swipeOffset.value = fromChat
+  swipeOpacity.value = fromOpacity
+  if (bouncingMore) {
+    const w = getSwipeWindowWidth()
+    morePhase.value = 'close'
+    moreOffset.value = fromMore
+    clearMoreAnimTimer()
+    nextTick(() => {
+      swipeOffset.value = 0
+      swipeOpacity.value = 1
+      moreOffset.value = w
+    })
+    moreAnimTimer = setTimeout(() => {
+      moreAnimTimer = null
+      morePhase.value = ''
+      moreOffset.value = w
+    }, CHAT_SWIPE_CANCEL_MS + 20)
+  } else {
+    nextTick(() => {
+      swipeOffset.value = 0
+      swipeOpacity.value = 1
+    })
+  }
+  swipeLeaveTimer = setTimeout(() => {
+    swipeLeaveTimer = null
+    resetChatSwipeVisual()
+  }, CHAT_SWIPE_CANCEL_MS + 20)
+}
+
+function leaveDistanceFor(dx) {
+  const base = getSwipeWindowWidth() * CHAT_SWIPE_LEAVE_RATIO
+  const current = Math.abs(swipeOffset.value)
+  return Math.max(base, current + 20) * (dx > 0 ? 1 : -1)
+}
+
+function finishOpenMoreFromSwipe() {
+  chatFollowBatch.flush()
+  clearSwipeLeaveTimer()
+  clearMoreAnimTimer()
+  swipeTracking = false
+  moreOpen.value = true
+  // 先挂上 open 过渡，再在下一帧落到 0，避免与 follow(transition:none) 同帧合并导致无动画
+  const from = moreOffset.value
+  const fromParallax = swipeOffset.value
+  morePhase.value = 'open'
+  moreOffset.value = from
+  swipePhase.value = 'cancel'
+  swipeOffset.value = fromParallax
+  swipeOpacity.value = 1
+  nextTick(() => {
+    moreOffset.value = 0
+    swipeOffset.value = 0
+  })
+  moreAnimTimer = setTimeout(() => {
+    moreAnimTimer = null
+    morePhase.value = ''
+    resetChatSwipeVisual()
+  }, CHAT_SWIPE_ENTER_MS + 20)
+}
+
+function commitChatSwipeLeave(dx) {
+  chatFollowBatch.flush()
+  const goRight = dx > 0
+  if (!goRight && !conversationId.value) {
+    bounceChatSwipeBack()
+    return
+  }
+  clearSwipeLeaveTimer()
+  swipeTracking = false
+
+  if (!goRight) {
+    // 左滑：同页打开更多，不再 navigateTo
+    ensureMoreMounted()
+    finishOpenMoreFromSwipe()
+    return
+  }
+
+  // 右滑：离场后返回聊天列表
+  swipeNavigating = true
+  const target = leaveDistanceFor(dx)
+  const targetOpacity = 0.25
+  swipePhase.value = 'leave'
+  nextTick(() => {
+    swipeOffset.value = target
+    swipeOpacity.value = targetOpacity
+  })
+
+  swipeLeaveTimer = setTimeout(() => {
+    swipeLeaveTimer = null
+    goBack({ animationType: 'none', animationDuration: 0 })
+    swipeLeaveTimer = setTimeout(() => {
+      swipeLeaveTimer = null
+      resetChatSwipeVisual()
+      swipeNavigating = false
+    }, 80)
+  }, CHAT_SWIPE_LEAVE_MS + 16)
+}
+
+function openMorePanel(animated = true) {
+  if (!conversationId.value) return
+  if (moreOpen.value && morePhase.value !== 'close') return
+  ensureMoreMounted()
+  clearMoreAnimTimer()
+  const w = getSwipeWindowWidth()
+  if (!animated) {
+    moreOffset.value = 0
+    moreOpen.value = true
+    morePhase.value = ''
+    return
+  }
+  moreOffset.value = w
+  moreOpen.value = true
+  morePhase.value = 'open'
+  nextTick(() => {
+    moreOffset.value = 0
+  })
+  moreAnimTimer = setTimeout(() => {
+    moreAnimTimer = null
+    morePhase.value = ''
+  }, CHAT_SWIPE_ENTER_MS + 20)
+}
+
+function closeMorePanel(animated = true) {
+  chatFollowBatch.flush()
+  if (!moreMounted.value) return
+  if (!moreOpen.value && morePhase.value !== 'follow' && morePhase.value !== 'open') return
+  clearMoreAnimTimer()
+  const w = getSwipeWindowWidth()
+  const useAnim = animated !== false
+  if (!useAnim) {
+    moreOffset.value = w
+    moreOpen.value = false
+    morePhase.value = ''
+    resetChatSwipeVisual()
+    return
+  }
+  const fromMore = moreOffset.value
+  const fromChat = swipeOffset.value
+  morePhase.value = 'close'
+  moreOffset.value = fromMore
+  swipePhase.value = 'cancel'
+  swipeOffset.value = fromChat
+  swipeOpacity.value = 1
+  nextTick(() => {
+    moreOffset.value = w
+    swipeOffset.value = 0
+  })
+  moreAnimTimer = setTimeout(() => {
+    moreAnimTimer = null
+    moreOpen.value = false
+    morePhase.value = ''
+    moreOffset.value = w
+    resetChatSwipeVisual()
+  }, CHAT_SWIPE_LEAVE_MS + 20)
+}
+
+function exitChatFromMore() {
+  clearMoreAnimTimer()
+  moreOpen.value = false
+  morePhase.value = ''
+  moreMounted.value = false
+  goBack({ animationType: 'none', animationDuration: 0 })
+}
+
+async function onMoreBgChanged(url) {
+  chatBg.value = url || ''
+  await resolveChatBackground(chatBg.value)
+}
+
+function onChatSwipeStart(e) {
+  const stamp = touchStampOf(e)
+  if (stamp >= 0 && stamp === swipeStartStamp) return
+  if (stamp >= 0) swipeStartStamp = stamp
+
+  const hadMenu = !!menuMsg.value
+  onOutsideMenuTouch()
+  // 收起长按菜单的这次触摸不连带触发导航手势
+  if (hadMenu || shouldIgnoreChatSwipe()) {
+    resetChatSwipe()
+    return
+  }
+  clearSwipeLeaveTimer()
+  chatFollowBatch.cancel()
+  const p = pickTouchPoint(e)
+  if (!p) return
+  swipeStartX = p.x
+  swipeStartY = p.y
+  swipeStartAt = Date.now()
+  swipeSampleX = p.x
+  swipeSampleAt = swipeStartAt
+  swipeRecentVx = 0
+  swipeMoveStamp = -1
+  swipeTracking = true
+  swipeAxis = ''
+  swipePhase.value = ''
+  swipeOffset.value = 0
+  swipeOpacity.value = 1
+}
+
+function onChatSwipeMove(e) {
+  if (!swipeTracking) return
+  const stamp = touchStampOf(e)
+  if (stamp >= 0 && stamp === swipeMoveStamp) return
+  if (stamp >= 0) swipeMoveStamp = stamp
+
+  // 水平已锁后勿因面板/键盘瞬时状态掐断跟手
+  if (shouldIgnoreChatSwipe() && swipeAxis !== 'h') {
+    resetChatSwipe()
+    return
+  }
+  const p = pickTouchPoint(e)
+  if (!p) return
+  const dx = p.x - swipeStartX
+  const dy = p.y - swipeStartY
+  const absX = Math.abs(dx)
+  const absY = Math.abs(dy)
+
+  if (!swipeAxis) {
+    swipeAxis = resolveSwipeAxis(absX, absY, CHAT_SWIPE_AXIS_LOCK_PX)
+    if (!swipeAxis) return
+    if (swipeAxis === 'v') {
+      // 交给消息列表纵向滚动，彻底退出水平跟踪
+      swipeTracking = false
+      chatFollowBatch.cancel()
+      swipePhase.value = ''
+      swipeOffset.value = 0
+      swipeOpacity.value = 1
+      return
+    }
+  }
+
+  if (swipeAxis !== 'h') return
+  tryPreventTouchScroll(e)
+  noteSwipeSample(p.x)
+
+  if (dx < 0) {
+    // 左滑跟手打开更多层（更多层 1:1，会话层仅视差）；跟手不改 opacity
+    ensureMoreMounted()
+    const w = getSwipeWindowWidth()
+    const capped = Math.max(-w, Math.min(0, dx * CHAT_SWIPE_FOLLOW_FACTOR))
+    chatFollowBatch.queue({
+      phase: 'follow',
+      chatX: capped * CHAT_MORE_PARALLAX,
+      chatOp: 1,
+      morePhase: 'follow',
+      moreX: w + capped
+    })
+    return
+  }
+
+  // 右滑退出会话：1:1 跟手 + 超出上限橡胶阻尼；跟手阶段保持 opacity=1
+  const w = getSwipeWindowWidth()
+  const maxFollow = w * CHAT_SWIPE_FOLLOW_MAX_RATIO
+  const capped = rubberFollow(Math.max(0, dx * CHAT_SWIPE_FOLLOW_FACTOR), maxFollow)
+  chatFollowBatch.queue({
+    phase: 'follow',
+    chatX: capped,
+    chatOp: 1
+  })
+}
+
+function finishChatSwipe(e) {
+  const axis = swipeAxis
+  const tracking = swipeTracking
+  chatFollowBatch.flush()
+  if (!tracking) {
+    if (axis === 'h' && swipePhase.value === 'follow') bounceChatSwipeBack()
+    return
+  }
+  swipeTracking = false
+  if (shouldIgnoreChatSwipe() && axis !== 'h') {
+    bounceChatSwipeBack()
+    return
+  }
+  if (axis !== 'h') {
+    resetChatSwipeVisual()
+    return
+  }
+
+  const p = pickTouchPoint(e)
+  if (!p) {
+    bounceChatSwipeBack()
+    return
+  }
+  const dx = p.x - swipeStartX
+  const absX = Math.abs(dx)
+  const elapsed = Math.max(Date.now() - swipeStartAt, 1)
+  const avgVx = absX / elapsed
+  // 优先用近期瞬时速度，快速轻扫更灵敏
+  const vx = Math.max(avgVx, swipeRecentVx)
+
+  const w = getSwipeWindowWidth()
+  // 已锁水平轴：不再用终点 dy 否决（抬手常带纵向漂移）
+  const followAbs = dx > 0
+    ? swipeOffset.value
+    : (w - moreOffset.value)
+  const followMax = dx > 0 ? w * CHAT_SWIPE_LEAVE_RATIO : w
+  if (!shouldCommitHorizontalSwipe({
+    absX,
+    vx,
+    followAbs: swipePhase.value === 'follow' ? followAbs : 0,
+    followMax: swipePhase.value === 'follow' ? followMax : 0,
+    commitRatio: dx > 0 ? 1 : CHAT_MORE_COMMIT_RATIO
+  })) {
+    bounceChatSwipeBack()
+    return
+  }
+
+  commitChatSwipeLeave(dx)
+}
+
+function onChatSwipeEnd(e) {
+  finishChatSwipe(e)
+}
+
+function onChatSwipeCancel() {
+  if (swipeNavigating) return
+  bounceChatSwipeBack()
+}
+
+function shouldIgnoreMoreSwipe() {
+  return !!(
+    !moreOpen.value
+    || morePhase.value === 'open'
+    || morePhase.value === 'close'
+    || swipeNavigating
+  )
+}
+
+function onMoreSwipeStart(e) {
+  if (shouldIgnoreMoreSwipe()) {
+    moreSwipeTracking = false
+    return
+  }
+  const stamp = touchStampOf(e)
+  if (stamp >= 0 && stamp === moreStartStamp) return
+  if (stamp >= 0) moreStartStamp = stamp
+
+  const p = pickTouchPoint(e)
+  if (!p) return
+  chatFollowBatch.cancel()
+  moreSwipeStartX = p.x
+  moreSwipeStartY = p.y
+  moreSwipeStartAt = Date.now()
+  moreSampleX = p.x
+  moreSampleAt = moreSwipeStartAt
+  moreRecentVx = 0
+  moreMoveStamp = -1
+  moreSwipeTracking = true
+  moreSwipeAxis = ''
+  moreSwipeBase = moreOffset.value
+}
+
+function onMoreSwipeMove(e) {
+  if (!moreSwipeTracking) return
+  const stamp = touchStampOf(e)
+  if (stamp >= 0 && stamp === moreMoveStamp) return
+  if (stamp >= 0) moreMoveStamp = stamp
+
+  if (shouldIgnoreMoreSwipe() && moreSwipeAxis !== 'h') {
+    moreSwipeTracking = false
+    return
+  }
+  const p = pickTouchPoint(e)
+  if (!p) return
+  const dx = p.x - moreSwipeStartX
+  const dy = p.y - moreSwipeStartY
+  const absX = Math.abs(dx)
+  const absY = Math.abs(dy)
+
+  if (!moreSwipeAxis) {
+    moreSwipeAxis = resolveSwipeAxis(absX, absY, CHAT_SWIPE_AXIS_LOCK_PX)
+    if (!moreSwipeAxis) return
+    if (moreSwipeAxis === 'v') {
+      moreSwipeTracking = false
+      return
+    }
+  }
+  if (moreSwipeAxis !== 'h') return
+  tryPreventTouchScroll(e)
+  noteMoreSample(p.x)
+  // 仅右滑关闭；左滑忽略
+  const w = getSwipeWindowWidth()
+  const next = Math.max(0, Math.min(w, moreSwipeBase + Math.max(0, dx) * CHAT_SWIPE_FOLLOW_FACTOR))
+  chatFollowBatch.queue({
+    morePhase: 'follow',
+    moreX: next,
+    phase: 'follow',
+    chatX: -((w - next) * CHAT_MORE_PARALLAX),
+    chatOp: 1
+  })
+}
+
+function finishMoreSwipe(e) {
+  chatFollowBatch.flush()
+  if (!moreSwipeTracking) {
+    if (morePhase.value === 'follow' && moreOpen.value) {
+      // 跟手中断：按位移决定开/关
+      const w = getSwipeWindowWidth()
+      if (moreOffset.value > w * CHAT_MORE_COMMIT_RATIO) closeMorePanel()
+      else {
+        const from = moreOffset.value
+        morePhase.value = 'open'
+        moreOffset.value = from
+        nextTick(() => {
+          moreOffset.value = 0
+          swipeOffset.value = 0
+        })
+        clearMoreAnimTimer()
+        moreAnimTimer = setTimeout(() => {
+          moreAnimTimer = null
+          morePhase.value = ''
+          resetChatSwipeVisual()
+        }, CHAT_SWIPE_ENTER_MS + 20)
+      }
+    }
+    return
+  }
+  moreSwipeTracking = false
+  if (shouldIgnoreMoreSwipe() && moreSwipeAxis !== 'h') return
+  if (moreSwipeAxis !== 'h') return
+
+  const p = pickTouchPoint(e)
+  if (!p) {
+    morePhase.value = 'open'
+    moreOffset.value = 0
+    return
+  }
+  const dx = p.x - moreSwipeStartX
+  const absX = Math.abs(dx)
+  const elapsed = Math.max(Date.now() - moreSwipeStartAt, 1)
+  const avgVx = absX / elapsed
+  const vx = Math.max(avgVx, moreRecentVx)
+
+  const w = getSwipeWindowWidth()
+  const isRatio = moreOffset.value > w * CHAT_MORE_COMMIT_RATIO
+  if (dx > 0 && shouldCommitHorizontalSwipe({
+    absX,
+    vx,
+    followAbs: isRatio ? moreOffset.value : 0,
+    followMax: isRatio ? w : 0,
+    commitRatio: CHAT_MORE_COMMIT_RATIO
+  })) {
+    closeMorePanel()
+    return
+  }
+  // 未达阈值：从当前跟手位置弹回打开态
+  const from = moreOffset.value
+  morePhase.value = 'open'
+  moreOffset.value = from
+  swipePhase.value = 'cancel'
+  nextTick(() => {
+    moreOffset.value = 0
+    swipeOffset.value = 0
+  })
+  clearMoreAnimTimer()
+  moreAnimTimer = setTimeout(() => {
+    moreAnimTimer = null
+    morePhase.value = ''
+    resetChatSwipeVisual()
+  }, CHAT_SWIPE_ENTER_MS + 20)
+}
+
+function onMoreSwipeEnd(e) {
+  finishMoreSwipe(e)
+}
+
+function onMoreSwipeCancel() {
+  chatFollowBatch.cancel()
+  moreSwipeTracking = false
+  if (!moreOpen.value) return
+  morePhase.value = 'open'
+  moreOffset.value = 0
+  swipeOffset.value = 0
 }
 
 async function loadFriendStatus() {
@@ -785,6 +1545,8 @@ onLoad(async (q) => {
   conversationId.value = Number(q.id)
   getStore().setActiveChatId(conversationId.value)
   title.value = decodeURIComponent(q.title || '聊天')
+  // 尽早预挂载「更多」层，避免首滑中途创建 DOM 造成跟手卡顿
+  ensureMoreMounted()
   chatBg.value = getBackground(conversationId.value)
   await resolveChatBackground(chatBg.value)
   bindConversationSubscription()
@@ -810,6 +1572,13 @@ onLoad(async (q) => {
 })
 
 onShow(async () => {
+  // 右滑退出列表动画残留清理；同页更多不走路由，无需特殊复位
+  if (!swipeNavigating && !moreOpen.value) {
+    clearSwipeLeaveTimer()
+    resetChatSwipeVisual()
+    swipeTracking = false
+  }
+  if (moreOpen.value) moreRefreshSeq.value += 1
   if (conversationId.value) getStore().setActiveChatId(conversationId.value)
   if (!conversationId.value) return
   try {
@@ -849,6 +1618,7 @@ onHide(() => {
 })
 
 onUnload(() => {
+  clearSwipeLeaveTimer()
   stopTypingStatus(true)
   clearRemoteTyping()
   clearDraftPersistTimer()
@@ -876,6 +1646,7 @@ onMounted(() => {
     uni.onKeyboardHeightChange(onKeyboardHeightChange)
   } catch (e) {}
   offs.push(onWs('chat', (msg) => {
+    if (!msg || typeof msg !== 'object') return
     if (msg.conversationId !== conversationId.value) return
     const myId = getStore().state.user?.id
     const stick = nearBottom || msg.senderId === myId
@@ -886,11 +1657,13 @@ onMounted(() => {
     }
   }))
   offs.push(onWs('ai', (chunk) => {
+    if (!chunk || typeof chunk !== 'object') return
     if (chunk.conversationId !== conversationId.value) return
     handleAi(chunk)
   }))
   offs.push(onWs('typing', (p) => {
-    if (Number(p?.conversationId) !== Number(conversationId.value)) return
+    if (!p || typeof p !== 'object') return
+    if (Number(p.conversationId) !== Number(conversationId.value)) return
     if (!isPrivateHuman.value) {
       clearRemoteTyping()
       return
@@ -901,13 +1674,14 @@ onMounted(() => {
     typingText.value = (memberDisplayName(mem) || '对方') + ' 正在输入…'
   }))
   offs.push(onWs('react', (payload) => {
+    if (!payload || typeof payload !== 'object') return
     const myId = getStore().state.user?.id
     // 自己发出的事件已乐观更新，忽略回声避免抖动
-    if (payload?.userId != null && Number(payload.userId) === Number(myId)) return
+    if (payload.userId != null && Number(payload.userId) === Number(myId)) return
     applyRemoteReaction(payload)
   }))
   offs.push(onWs('notify', (body) => {
-    if (!body || body.type !== 'conversation_cleared') return
+    if (!body || typeof body !== 'object' || body.type !== 'conversation_cleared') return
     const id = body.payload?.conversationId != null
       ? body.payload.conversationId
       : body.payload?.conversation?.id
@@ -962,7 +1736,7 @@ onUnmounted(() => {
   stopVoicePlayback()
   if (recorder && recording.value) {
     voiceWillSend = false
-    recorder.stop()
+    try { recorder.stop() } catch (e) {}
   }
 })
 
@@ -1043,7 +1817,7 @@ function onScroll(e) {
   }
   // 距顶一定距离即预取，不必等顶到头
   if (top <= LOAD_MORE_THRESHOLD) {
-    loadMore()
+    if (connected.value) loadMore()
   }
 }
 
@@ -1112,7 +1886,8 @@ function scrollToBottomLite() {
 }
 
 async function loadHistory(beforeId) {
-  const list = await api.messages(conversationId.value, beforeId)
+  // 断连期间避免刷网络异常 Toast：走 silent 模式（仍让函数失败以保持原调用行为）
+  const list = await api.messages(conversationId.value, beforeId, !connected.value)
   const rows = (list || []).map((msg) => normalizeMsg(msg))
   if (!beforeId) {
     messages.value = rows
@@ -1122,7 +1897,7 @@ async function loadHistory(beforeId) {
     // 首屏内容较矮时静默补拉，避免一上滑就顶到头
     if (hasMoreHistory.value) {
       setTimeout(() => {
-        if (currentScrollTop <= LOAD_MORE_THRESHOLD) loadMore()
+        if (connected.value && currentScrollTop <= LOAD_MORE_THRESHOLD) loadMore()
       }, 320)
     }
   } else {
@@ -1169,7 +1944,7 @@ async function applyLocalHistoryCleared() {
  * @returns {Promise<Array>} 本页消息（升序），失败或无更多时返回 []
  */
 async function fetchEarlierHistoryPage() {
-  if (loadMoreLock || loadingMore.value || !hasMoreHistory.value || !messages.value.length) {
+  if (loadMoreLock || loadingMore.value || !connected.value || !hasMoreHistory.value || !messages.value.length) {
     return []
   }
   loadMoreLock = true
@@ -1211,6 +1986,7 @@ async function fetchEarlierHistoryPage() {
  * 预取更早消息，并按内容高度差还原滚动位置，避免上滑跳动。
  */
 async function loadMore() {
+  if (!connected.value) return
   const rows = await fetchEarlierHistoryPage()
   if (!rows.length) return
   // 仍靠近顶部则继续预取，填满可视区域（底部补拉走 nearBottom 分支）
@@ -1287,7 +2063,7 @@ function insertMention(name, userId) {
 }
 
 function openSelfProfile() {
-  uni.switchTab({ url: '/pages/mine/mine' })
+  requestMainTab(2, { animated: false })
 }
 
 function openSenderProfile(m) {
@@ -1398,6 +2174,7 @@ function formatMsgTime(t) {
 }
 
 function upsertMsg(msg) {
+  if (!msg || typeof msg !== 'object') return
   const myId = getStore().state.user?.id
   msg = normalizeMsg({ ...msg, mine: msg.senderId === myId })
   if (msg.clientMsgId && streamingMap.value[msg.clientMsgId]) {
@@ -1488,7 +2265,7 @@ function restoreAiStream(detail) {
 async function syncLatestAfterAiDone() {
   if (!conversationId.value) return
   try {
-    const list = await api.messages(conversationId.value)
+    const list = await api.messages(conversationId.value, undefined, !connected.value)
     const rows = list || []
     for (const msg of rows) {
       upsertMsg(msg)
@@ -1532,6 +2309,7 @@ function ensureAiStreamingBubble(clientMsgId, content) {
 }
 
 function handleAi(chunk) {
+  if (!chunk || typeof chunk !== 'object') return
   if (chunk.type === 'start') {
     ensureAiStreamingBubble(chunk.clientMsgId, '')
     if (nearBottom) scrollToBottomLite()
@@ -1740,23 +2518,78 @@ function toggleVoiceMode() {
 
 function initRecorder() {
   if (!uni.getRecorderManager) return
-  recorder = uni.getRecorderManager()
+  try {
+    recorder = uni.getRecorderManager()
+  } catch (e) {
+    recorder = null
+    return
+  }
   recorder.onStop(async (res) => {
     recording.value = false
-    if (!voiceWillSend || !res.tempFilePath) return
+    const transcript = stopLiveSpeechRecognize()
+    if (!voiceWillSend || !res?.tempFilePath) return
     const elapsed = Date.now() - recordStartTime
     if (elapsed < 800) {
       uni.showToast({ title: '说话时间太短', icon: 'none' })
       return
     }
     const duration = Math.max(1, Math.round(elapsed / 1000))
-    await sendVoice(res.tempFilePath, duration)
+    try {
+      await sendVoice(res.tempFilePath, duration, transcript)
+    } catch (e) {
+      showSendError(e)
+    }
   })
   recorder.onError(() => {
     recording.value = false
     voiceWillSend = false
+    stopLiveSpeechRecognize()
     uni.showToast({ title: '录音失败', icon: 'none' })
   })
+}
+
+/**
+ * 仅 H5 可选实时转写；App 端禁止 plus.speech。
+ * 原因：RecorderManager 与 plus.speech 同时抢麦克风会导致原生闪退；
+ * App 转写交给后端 ASR（VoiceTranscriptService）。
+ */
+function startLiveSpeechRecognize() {
+  liveVoiceTranscript = ''
+  // #ifdef H5
+  try {
+    const SR = typeof window !== 'undefined' && (window.SpeechRecognition || window.webkitSpeechRecognition)
+    if (!SR) return
+    const rec = new SR()
+    rec.lang = 'zh-CN'
+    rec.continuous = true
+    rec.interimResults = true
+    rec.onresult = (ev) => {
+      let text = ''
+      for (let i = 0; i < ev.results.length; i++) {
+        text += (ev.results[i] && ev.results[i][0] && ev.results[i][0].transcript) || ''
+      }
+      liveVoiceTranscript = String(text || '').trim()
+    }
+    rec.onerror = () => {}
+    rec.start()
+    h5SpeechRec = rec
+  } catch (e) {}
+  // #endif
+}
+
+function stopLiveSpeechRecognize() {
+  const text = liveVoiceTranscript
+  liveVoiceTranscript = ''
+  // #ifdef H5
+  try {
+    if (h5SpeechRec) {
+      h5SpeechRec.onresult = null
+      h5SpeechRec.stop()
+    }
+  } catch (e) {}
+  // #endif
+  h5SpeechRec = null
+  return text
 }
 
 async function ensureRecordAuth() {
@@ -1798,6 +2631,7 @@ async function onVoiceTouchStart(e) {
     uni.showToast({ title: '当前环境不支持录音', icon: 'none' })
     return
   }
+  if (recording.value) return
   const ok = await ensureRecordAuth()
   if (!ok) return
   closeAuxPanels()
@@ -1807,8 +2641,18 @@ async function onVoiceTouchStart(e) {
   voiceWillSend = true
   recordStartTime = Date.now()
   stopVoicePlayback()
-  recorder.start({ duration: 60000, format: 'mp3' })
-  uni.vibrateShort && uni.vibrateShort({})
+  // App 不做本地实时识别，避免与 RecorderManager 抢麦闪退；转写由后端 ASR 完成
+  startLiveSpeechRecognize()
+  try {
+    recorder.start({ duration: 60000, format: 'mp3' })
+  } catch (err) {
+    recording.value = false
+    voiceWillSend = false
+    stopLiveSpeechRecognize()
+    uni.showToast({ title: '无法开始录音', icon: 'none' })
+    return
+  }
+  try { uni.vibrateShort && uni.vibrateShort({}) } catch (e) {}
 }
 
 function onVoiceTouchMove(e) {
@@ -1822,7 +2666,7 @@ function finishVoiceTouch() {
   voiceWillSend = !recordCancel.value
   recording.value = false
   recordCancel.value = false
-  recorder.stop()
+  try { recorder && recorder.stop() } catch (e) {}
 }
 
 function onVoiceTouchEnd() {
@@ -1834,14 +2678,17 @@ function onVoiceTouchCancel() {
   if (!recording.value) return
   recording.value = false
   recordCancel.value = false
-  recorder.stop()
+  stopLiveSpeechRecognize()
+  try { recorder && recorder.stop() } catch (e) {}
 }
 
-async function sendVoice(filePath, duration) {
+async function sendVoice(filePath, duration, transcript) {
   uni.showLoading({ title: '发送中…', mask: true })
   try {
     const up = await api.upload(filePath)
     const base = { duration }
+    const t = transcript != null ? String(transcript).trim() : ''
+    if (t) base.transcript = t
     const extraJson = replyTarget.value?.msg
       ? buildReplyExtra(replyTarget.value.msg, replyTarget.value.name, base)
       : stringifyExtra(base)
@@ -1863,34 +2710,44 @@ async function sendVoice(filePath, duration) {
 }
 
 function voiceDurationText(m) {
-  return formatVoiceDuration(parseVoiceExtra(m.extraJson).duration)
+  return formatVoiceDuration(parseVoiceExtra(m?.extraJson).duration)
+}
+
+function voiceTranscriptOf(m) {
+  return voiceTranscriptText(m?.extraJson)
 }
 
 function stopVoicePlayback() {
   if (!audioCtx) return
-  audioCtx.stop()
-  audioCtx.destroy()
+  const ctx = audioCtx
   audioCtx = null
   playingId.value = null
+  try { ctx.stop() } catch (e) {}
+  try { ctx.destroy() } catch (e) {}
 }
 
 function togglePlayVoice(m) {
-  if (m.msgType !== MSG_VOICE || !m.content) return
+  if (!m || m.msgType !== MSG_VOICE || !m.content) return
   if (playingId.value === m.id) {
     stopVoicePlayback()
     return
   }
   stopVoicePlayback()
-  audioCtx = uni.createInnerAudioContext()
-  audioCtx.src = fullUrl(m.content)
-  audioCtx.onEnded(() => { playingId.value = null })
-  audioCtx.onStop(() => { playingId.value = null })
-  audioCtx.onError(() => {
-    playingId.value = null
+  try {
+    audioCtx = uni.createInnerAudioContext()
+    audioCtx.src = fullUrl(m.content)
+    audioCtx.onEnded(() => { playingId.value = null })
+    audioCtx.onStop(() => { playingId.value = null })
+    audioCtx.onError(() => {
+      playingId.value = null
+      uni.showToast({ title: '播放失败', icon: 'none' })
+    })
+    audioCtx.play()
+    playingId.value = m.id
+  } catch (e) {
+    stopVoicePlayback()
     uni.showToast({ title: '播放失败', icon: 'none' })
-  })
-  audioCtx.play()
-  playingId.value = m.id
+  }
 }
 
 function toggleEmoji() {
@@ -2158,6 +3015,10 @@ async function loadEarlierPreviewImages() {
     updatePreviewAlbum({ hasMoreEarlier: false, loadingEarlier: false })
     return
   }
+  if (!connected.value) {
+    updatePreviewAlbum({ hasMoreEarlier: hasMoreHistory.value, loadingEarlier: false })
+    return
+  }
   previewEarlierLock = true
   updatePreviewAlbum({ loadingEarlier: true, hasMoreEarlier: true })
 
@@ -2168,7 +3029,13 @@ async function loadEarlierPreviewImages() {
   const MAX_EMPTY_PAGES = 8
 
   try {
-    while (feedbackState.preview.show && hasMoreHistory.value && gotImages === 0 && guard < MAX_EMPTY_PAGES) {
+    while (
+      feedbackState.preview.show
+      && connected.value
+      && hasMoreHistory.value
+      && gotImages === 0
+      && guard < MAX_EMPTY_PAGES
+    ) {
       guard++
       // 等待列表侧 loadMore 释放锁
       let wait = 0
@@ -2242,7 +3109,7 @@ async function loadEarlierPreviewImages() {
     // 本轮成功扩到了更早图片，且仍靠近头部：稍后再填缓冲，避开 swiper 同步/快滑窗口
     if (gotImages > 0 && current <= 1 && hasMoreHistory.value) {
       setTimeout(() => {
-        if (feedbackState.preview.show && feedbackState.preview.current <= 1) {
+        if (feedbackState.preview.show && feedbackState.preview.current <= 1 && connected.value) {
           loadEarlierPreviewImages()
         }
       }, 480)
@@ -2672,8 +3539,10 @@ async function confirmForward(conv) {
     msgType: m.msgType === 5 ? 1 : m.msgType
   }
   if (m.msgType === MSG_VOICE) {
-    const dur = parseVoiceExtra(m.extraJson).duration
-    payload.extraJson = stringifyExtra({ duration: dur })
+    const ve = parseVoiceExtra(m.extraJson)
+    const base = { duration: ve.duration }
+    if (ve.transcript) base.transcript = ve.transcript
+    payload.extraJson = stringifyExtra(base)
   } else if (m.msgType === 2) {
     const base = {}
     const cap = imageCaption(m)
@@ -2712,10 +3581,7 @@ function openMoreMenu() {
   closeAuxPanels()
   voiceMode.value = false
   if (!conversationId.value) return
-  uni.navigateTo({
-    url: '/pages/chat-more/chat-more?id=' + conversationId.value
-      + '&title=' + encodeURIComponent(title.value || '聊天')
-  })
+  openMorePanel(true)
 }
 </script>
 
@@ -2730,6 +3596,13 @@ page {
 </style>
 
 <style scoped lang="scss">
+.chat-root {
+  position: relative;
+  width: 100%;
+  max-width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
 .chat-page {
   position: relative;
   width: 100%;
@@ -2739,6 +3612,19 @@ page {
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
+  will-change: transform;
+  transform: translateZ(0);
+}
+.chat-more-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 300;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  box-sizing: border-box;
+  will-change: transform;
+  background: #0A0614;
 }
 .nav-bar {
   flex-shrink: 0;
@@ -3503,6 +4389,24 @@ $tool-ico-lit: #C4B5FD;
   align-items: center;
   gap: 16rpx;
   min-width: 220rpx;
+}
+.voice-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8rpx;
+  max-width: 420rpx;
+}
+.voice-transcript {
+  font-size: 24rpx;
+  line-height: 1.45;
+  color: $pc-muted;
+  padding: 0 8rpx;
+  word-break: break-word;
+}
+.mine .voice-transcript {
+  color: rgba(245, 237, 255, 0.78);
+  text-align: right;
 }
 .voice-play {
   width: 52rpx;
