@@ -34,8 +34,14 @@
         "navigationBarTitleText": "脉冲",
         "navigationBarBackgroundColor": "#24123F",
         "navigationBarTextStyle": "white",
+        "backgroundColor": "#0A0614",
         "disableScroll": true,
-        "app-plus": { "titleNView": false, "bounce": "none" }
+        "app-plus": {
+          "titleNView": false,
+          "bounce": "none",
+          "background": "#0A0614",
+          "popGesture": "none"
+        }
       }
     },
     {
@@ -60,8 +66,14 @@
         "navigationBarTitleText": "通讯录",
         "navigationBarBackgroundColor": "#24123F",
         "navigationBarTextStyle": "white",
+        "backgroundColor": "#0A0614",
         "disableScroll": true,
-        "app-plus": { "titleNView": false, "bounce": "none" }
+        "app-plus": {
+          "titleNView": false,
+          "bounce": "none",
+          "background": "#0A0614",
+          "popGesture": "none"
+        }
       }
     },
     {
@@ -71,8 +83,14 @@
         "navigationBarTitleText": "我的",
         "navigationBarBackgroundColor": "#24123F",
         "navigationBarTextStyle": "white",
+        "backgroundColor": "#0A0614",
         "disableScroll": true,
-        "app-plus": { "titleNView": false, "bounce": "none" }
+        "app-plus": {
+          "titleNView": false,
+          "bounce": "none",
+          "background": "#0A0614",
+          "popGesture": "none"
+        }
       }
     },
     {

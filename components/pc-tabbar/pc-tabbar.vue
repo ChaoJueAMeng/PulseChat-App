@@ -43,7 +43,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
 import { getStore } from '../../store/index.js'
-import { TAB_PATHS, switchTabAnimated } from '../../utils/tab-swipe.js'
+import { TAB_PATHS, requestMainTab } from '../../utils/tab-swipe.js'
 
 const props = defineProps({
   /** 当前 Tab：0 聊天 / 1 通讯录 / 2 我的 */
@@ -70,7 +70,7 @@ function onTap(index) {
   bounceIndex.value = index
   setTimeout(() => { bounceIndex.value = -1 }, 420)
   if (index === props.current) return
-  switchTabAnimated(props.current, index)
+  requestMainTab(index, { animated: true })
 }
 
 onMounted(hideNative)
