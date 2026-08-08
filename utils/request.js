@@ -1,6 +1,20 @@
 import { BASE_URL } from './config.js'
 import { getStore } from '../store/index.js'
 
+/** 仅对网络层 fail 做 Toast 节流：断网期间只弹一次，网络恢复(任意请求成功)后重置 */
+let networkToastShown = false
+function resetNetworkToastState() {
+  networkToastShown = false
+}
+function showNetworkToastThrottled() {
+  if (networkToastShown) return
+  networkToastShown = true
+  uni.showToast({ title: '网络异常', icon: 'none' })
+}
+
+const NETWORK_RETRY_ATTEMPTS = 1 // 1~2 次短重试；重试期间不弹 Toast
+const NETWORK_RETRY_DELAY_MS = 420
+
 export function request({ url, method = 'GET', data, auth = true, header = {}, silent = false }) {
   const store = getStore()
   const headers = {
@@ -13,52 +27,61 @@ export function request({ url, method = 'GET', data, auth = true, header = {}, s
     headers.Authorization = 'Bearer ' + store.state.token
   }
   return new Promise((resolve, reject) => {
-    uni.request({
-      url: BASE_URL + url,
-      method,
-      data,
-      header: headers,
-      success: (res) => {
-        let body = res.data
-        // 部分端上 JSON 会以字符串返回
-        if (typeof body === 'string') {
-          try { body = JSON.parse(body) } catch (e) { body = null }
-        }
-        if (res.statusCode === 401 || (body && body.code === 401)) {
-          store.clearAuth()
-          if (!silent) {
-            uni.showToast({ title: (body && body.message) || '请重新登录', icon: 'none' })
+    const attempt = (retryNo) => {
+      uni.request({
+        url: BASE_URL + url,
+        method,
+        data,
+        header: headers,
+        success: (res) => {
+          // 只要请求成功到达服务端，就视为网络恢复，允许下次断网再提示
+          resetNetworkToastState()
+
+          let body = res.data
+          // 部分端上 JSON 会以字符串返回
+          if (typeof body === 'string') {
+            try { body = JSON.parse(body) } catch (e) { body = null }
           }
-          uni.reLaunch({ url: '/pages/login/login' })
-          reject(new Error((body && body.message) || '未登录'))
-          return
-        }
-        if (!body || typeof body.code === 'undefined') {
-          // 兼容 Spring 默认错误体 {status,error,path}
-          const tip = (body && (body.message || body.error))
-            || ('服务异常(' + (res.statusCode || '?') + ')')
-          if (!silent) {
-            uni.showToast({ title: String(tip).slice(0, 40), icon: 'none' })
+          if (res.statusCode === 401 || (body && body.code === 401)) {
+            store.clearAuth()
+            if (!silent) {
+              uni.showToast({ title: (body && body.message) || '请重新登录', icon: 'none' })
+            }
+            uni.reLaunch({ url: '/pages/login/login' })
+            reject(new Error((body && body.message) || '未登录'))
+            return
           }
-          reject(new Error(tip))
-          return
-        }
-        if (body.code !== 0) {
-          if (!silent) {
-            uni.showToast({ title: body.message || '请求失败', icon: 'none' })
+          if (!body || typeof body.code === 'undefined') {
+            // 兼容 Spring 默认错误体 {status,error,path}
+            const tip = (body && (body.message || body.error))
+              || ('服务异常(' + (res.statusCode || '?') + ')')
+            if (!silent) {
+              uni.showToast({ title: String(tip).slice(0, 40), icon: 'none' })
+            }
+            reject(new Error(tip))
+            return
           }
-          reject(new Error(body.message || '请求失败'))
-          return
+          if (body.code !== 0) {
+            if (!silent) {
+              uni.showToast({ title: body.message || '请求失败', icon: 'none' })
+            }
+            reject(new Error(body.message || '请求失败'))
+            return
+          }
+          resolve(body.data)
+        },
+        fail: (err) => {
+          if (retryNo < NETWORK_RETRY_ATTEMPTS) {
+            setTimeout(() => attempt(retryNo + 1), NETWORK_RETRY_DELAY_MS + retryNo * 120)
+            return
+          }
+          if (!silent) showNetworkToastThrottled()
+          reject(err)
         }
-        resolve(body.data)
-      },
-      fail: (err) => {
-        if (!silent) {
-          uni.showToast({ title: '网络异常', icon: 'none' })
-        }
-        reject(err)
-      }
-    })
+      })
+    }
+
+    attempt(0)
   })
 }
 
@@ -94,8 +117,9 @@ export const api = {
   addBot: (id) => request({ url: '/api/conversations/' + id + '/bot', method: 'POST' }),
   markRead: (id, lastMsgId, silent = false) => request({ url: '/api/conversations/' + id + '/read', method: 'POST', data: { lastMsgId }, silent }),
   updateConvDraft: (id, data) => request({ url: '/api/conversations/' + id + '/draft', method: 'PUT', data }),
-  messages: (conversationId, beforeId) => request({
-    url: '/api/messages?conversationId=' + conversationId + (beforeId ? '&beforeId=' + beforeId : '')
+  messages: (conversationId, beforeId, silent = false) => request({
+    url: '/api/messages?conversationId=' + conversationId + (beforeId ? '&beforeId=' + beforeId : ''),
+    silent
   }),
   sendMessage: (data) => request({ url: '/api/messages', method: 'POST', data }),
   recallMessage: (id) => request({ url: '/api/messages/' + id + '/recall', method: 'POST' }),

@@ -6,6 +6,7 @@ let heartbeatTimer = null
 let reconnectTimer = null
 /** 连接世代：主动重建时递增，忽略旧 socket 的 close/error */
 let connId = 0
+let reconnectAttempts = 0
 /** 是否正在主动关闭（避免触发自动重连） */
 let closingIntentionally = false
 /** App 进入后台时主动暂停 WS，期间禁止自动重连 */
@@ -44,12 +45,14 @@ function scheduleReconnect() {
   if (reconnectTimer) return
   const token = getStore().state.token
   if (!token) return
+  reconnectAttempts++
+  const delayMs = Math.min(2500 * Math.pow(2, reconnectAttempts - 1), 20000)
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null
     if (pausedForBackground) return
     const t = getStore().state.token
     if (t) connectWs(t)
-  }, 2500)
+  }, delayMs)
 }
 
 function subscriptionIdOf(destination) {
@@ -108,6 +111,7 @@ export function connectWs(token) {
   pausedForBackground = false
   clearReconnectTimer()
   closeSocketSoft()
+  reconnectAttempts = 0
 
   const myId = ++connId
   const store = getStore()
@@ -142,6 +146,7 @@ export function connectWs(token) {
     const data = typeof res.data === 'string' ? res.data : ''
     if (data.startsWith('CONNECTED')) {
       connecting = false
+      reconnectAttempts = 0
       store.setConnected(true)
       resubscribeActiveDestinations(myId)
       startHeartbeat()
@@ -159,25 +164,27 @@ export function connectWs(token) {
       try { body = JSON.parse(bodyRaw) } catch (e) { body = bodyRaw }
       emit('message', { destination, body })
       if (destination.includes('/topic/conversation.') && destination.endsWith('.ai')) {
-        emit('ai', body)
+        if (body && typeof body === 'object') emit('ai', body)
       } else if (destination.includes('/topic/conversation.') && destination.endsWith('.typing')) {
-        emit('typing', body)
+        if (body && typeof body === 'object') emit('typing', body)
       } else if (destination.includes('/topic/conversation.') && destination.endsWith('.react')) {
-        emit('react', body)
+        if (body && typeof body === 'object') emit('react', body)
       } else if (destination.includes('/topic/conversation.')) {
         // 会话主题也可能推送 reaction 事件
-        if (body && (body.type === 'reaction' || body.type === 'message_react')) {
+        if (body && typeof body === 'object' && (body.type === 'reaction' || body.type === 'message_react')) {
           emit('react', body)
-        } else {
+        } else if (body && typeof body === 'object') {
           emit('chat', body)
         }
       } else if (destination.includes('/topic/presence')) {
-        store.setOnline(body.userId, body.online)
-        emit('presence', body)
+        if (body && typeof body === 'object' && body.userId != null) {
+          store.setOnline(body.userId, body.online)
+          emit('presence', body)
+        }
       } else if (destination.includes('/queue/notify')) {
-        if (body && (body.type === 'reaction' || body.type === 'message_react')) {
+        if (body && typeof body === 'object' && (body.type === 'reaction' || body.type === 'message_react')) {
           emit('react', body.payload || body)
-        } else {
+        } else if (body != null) {
           emit('notify', body)
         }
       }

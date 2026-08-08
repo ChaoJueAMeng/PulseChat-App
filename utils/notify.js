@@ -1,6 +1,7 @@
 import { getStore } from '../store/index.js'
 import { sortConversations } from './chat-settings.js'
 import { api } from './request.js'
+import { requestMainTab } from './tab-swipe.js'
 
 /**
  * UniPush 2.0：真机启用；模拟器（尤其 MuMu）个推会疯狂重试拖垮进程，自动跳过。
@@ -126,7 +127,7 @@ function openChatFromPayload(data) {
 }
 
 function openContactsFromFriendNotify() {
-  uni.switchTab({ url: '/pages/contacts/contacts' })
+  requestMainTab(1, { animated: false })
 }
 
 function handleNotifyPayload(raw) {
