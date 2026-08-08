@@ -45,6 +45,7 @@
 
 <script setup>
 import { ref, computed } from 'vue'
+import { onLoad } from '@dcloudio/uni-app'
 import { api } from '../../utils/request.js'
 import { showModal } from '../../utils/feedback.js'
 import PcAvatar from '../../components/pc-avatar/pc-avatar.vue'
@@ -55,6 +56,17 @@ const list = ref([])
 const statusMap = ref({})
 const statusBarHeight = uni.getSystemInfoSync().statusBarHeight || 20
 const headerStyle = computed(() => ({ paddingTop: statusBarHeight + 'px' }))
+
+onLoad(() => {
+  try {
+    const cached = uni.getStorageSync('pc_scan_keyword')
+    if (cached) {
+      keyword.value = String(cached)
+      uni.removeStorageSync('pc_scan_keyword')
+      doSearch()
+    }
+  } catch (e) {}
+})
 
 function goBack() {
   uni.navigateBack()
