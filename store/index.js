@@ -35,6 +35,17 @@ export function createPiniaLikeStore() {
       uni.setStorageSync('pc_refresh', state.refreshToken)
       uni.setStorageSync('pc_user', state.user)
     },
+    /** 滑动续期 / refresh：仅更新凭证，保留当前 user */
+    updateTokens(accessToken, refreshToken) {
+      if (accessToken) {
+        state.token = accessToken
+        uni.setStorageSync('pc_token', accessToken)
+      }
+      if (refreshToken) {
+        state.refreshToken = refreshToken
+        uni.setStorageSync('pc_refresh', refreshToken)
+      }
+    },
     clearAuth() {
       state.token = ''
       state.refreshToken = ''

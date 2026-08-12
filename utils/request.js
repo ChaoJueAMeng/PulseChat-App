@@ -15,7 +15,80 @@ function showNetworkToastThrottled() {
 const NETWORK_RETRY_ATTEMPTS = 1 // 1~2 次短重试；重试期间不弹 Toast
 const NETWORK_RETRY_DELAY_MS = 420
 
-export function request({ url, method = 'GET', data, auth = true, header = {}, silent = false }) {
+/** 并发 401 时共用一次 refresh，避免刷爆 /api/auth/refresh */
+let refreshInflight = null
+
+function headerValue(headers, name) {
+  if (!headers) return ''
+  const want = String(name).toLowerCase()
+  for (const key of Object.keys(headers)) {
+    if (String(key).toLowerCase() === want) {
+      const v = headers[key]
+      return v == null ? '' : String(v)
+    }
+  }
+  return ''
+}
+
+/** 后端 JwtAuthFilter 滑动续期时通过响应头下发新 token */
+function applySlideRenewHeaders(resHeaders) {
+  const access = headerValue(resHeaders, 'X-Access-Token')
+  const refresh = headerValue(resHeaders, 'X-Refresh-Token')
+  if (!access && !refresh) return
+  getStore().updateTokens(access || undefined, refresh || undefined)
+}
+
+function forceReLogin(message, silent) {
+  const store = getStore()
+  store.clearAuth()
+  if (!silent) {
+    uni.showToast({ title: message || '请重新登录', icon: 'none' })
+  }
+  uni.reLaunch({ url: '/pages/login/login' })
+}
+
+function refreshAuthTokens() {
+  const store = getStore()
+  const refreshToken = store.state.refreshToken
+  if (!refreshToken) {
+    return Promise.reject(new Error('无刷新令牌'))
+  }
+  if (refreshInflight) return refreshInflight
+  refreshInflight = new Promise((resolve, reject) => {
+    uni.request({
+      url: BASE_URL + '/api/auth/refresh',
+      method: 'POST',
+      data: { refreshToken },
+      header: {
+        'Content-Type': 'application/json;charset=UTF-8',
+        'Accept': 'application/json',
+        'Accept-Charset': 'UTF-8'
+      },
+      success: (res) => {
+        let body = res.data
+        if (typeof body === 'string') {
+          try { body = JSON.parse(body) } catch (e) { body = null }
+        }
+        if (res.statusCode === 401 || (body && body.code === 401)) {
+          reject(new Error((body && body.message) || '刷新令牌已失效'))
+          return
+        }
+        if (!body || body.code !== 0 || !body.data || !body.data.accessToken) {
+          reject(new Error((body && body.message) || '刷新失败'))
+          return
+        }
+        store.setAuth(body.data)
+        resolve(body.data)
+      },
+      fail: reject
+    })
+  }).finally(() => {
+    refreshInflight = null
+  })
+  return refreshInflight
+}
+
+export function request({ url, method = 'GET', data, auth = true, header = {}, silent = false, _retriedAfterRefresh = false }) {
   const store = getStore()
   const headers = {
     'Content-Type': 'application/json;charset=UTF-8',
@@ -36,6 +109,7 @@ export function request({ url, method = 'GET', data, auth = true, header = {}, s
         success: (res) => {
           // 只要请求成功到达服务端，就视为网络恢复，允许下次断网再提示
           resetNetworkToastState()
+          applySlideRenewHeaders(res.header)
 
           let body = res.data
           // 部分端上 JSON 会以字符串返回
@@ -43,11 +117,25 @@ export function request({ url, method = 'GET', data, auth = true, header = {}, s
             try { body = JSON.parse(body) } catch (e) { body = null }
           }
           if (res.statusCode === 401 || (body && body.code === 401)) {
-            store.clearAuth()
-            if (!silent) {
-              uni.showToast({ title: (body && body.message) || '请重新登录', icon: 'none' })
+            if (auth && !_retriedAfterRefresh && store.state.refreshToken) {
+              refreshAuthTokens()
+                .then(() => request({
+                  url,
+                  method,
+                  data,
+                  auth,
+                  header,
+                  silent,
+                  _retriedAfterRefresh: true
+                }))
+                .then(resolve)
+                .catch(() => {
+                  forceReLogin((body && body.message) || '请重新登录', silent)
+                  reject(new Error((body && body.message) || '未登录'))
+                })
+              return
             }
-            uni.reLaunch({ url: '/pages/login/login' })
+            forceReLogin((body && body.message) || '请重新登录', silent)
             reject(new Error((body && body.message) || '未登录'))
             return
           }
@@ -88,6 +176,13 @@ export function request({ url, method = 'GET', data, auth = true, header = {}, s
 export const api = {
   login: (data) => request({ url: '/api/auth/login', method: 'POST', data, auth: false }),
   register: (data) => request({ url: '/api/auth/register', method: 'POST', data, auth: false }),
+  refresh: (refreshToken) => request({
+    url: '/api/auth/refresh',
+    method: 'POST',
+    data: { refreshToken },
+    auth: false,
+    silent: true
+  }),
   me: () => request({ url: '/api/users/me' }),
   updateMe: (data) => request({ url: '/api/users/me', method: 'PUT', data }),
   searchUsers: (keyword) => request({ url: '/api/users/search?keyword=' + encodeURIComponent(keyword) }),
@@ -194,24 +289,44 @@ export const api = {
   upload: (filePath, options = {}) => new Promise((resolve, reject) => {
     const store = getStore()
     const category = options.category ? '?category=' + encodeURIComponent(options.category) : ''
-    uni.uploadFile({
-      url: BASE_URL + '/api/files/upload' + category,
-      filePath,
-      name: 'file',
-      header: { Authorization: 'Bearer ' + store.state.token },
-      success: (res) => {
-        try {
-          const body = JSON.parse(res.data)
-          if (body.code === 0) resolve(body.data)
-          else {
+    const doUpload = () => {
+      uni.uploadFile({
+        url: BASE_URL + '/api/files/upload' + category,
+        filePath,
+        name: 'file',
+        header: { Authorization: 'Bearer ' + store.state.token },
+        success: (res) => {
+          applySlideRenewHeaders(res.header)
+          try {
+            const body = JSON.parse(res.data)
+            if (body.code === 0) {
+              resolve(body.data)
+              return
+            }
+            if (body.code === 401 || res.statusCode === 401) {
+              if (!options._retriedAfterRefresh && store.state.refreshToken) {
+                refreshAuthTokens()
+                  .then(() => api.upload(filePath, { ...options, _retriedAfterRefresh: true }))
+                  .then(resolve)
+                  .catch(() => {
+                    forceReLogin(body.message || '请重新登录', false)
+                    reject(new Error(body.message || '未登录'))
+                  })
+                return
+              }
+              forceReLogin(body.message || '请重新登录', false)
+              reject(new Error(body.message || '未登录'))
+              return
+            }
             uni.showToast({ title: body.message || '上传失败', icon: 'none' })
             reject(new Error(body.message || '上传失败'))
+          } catch (e) {
+            reject(e)
           }
-        } catch (e) {
-          reject(e)
-        }
-      },
-      fail: reject
-    })
+        },
+        fail: reject
+      })
+    }
+    doUpload()
   })
 }
