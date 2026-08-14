@@ -26,7 +26,7 @@
 
     <view v-if="!connected" class="banner">网络波动，正在重连脉冲通道…</view>
     <view v-else-if="convType === 1 && peer && !peer.bot && !isFriend" class="banner warn">你们已不是好友，无法发送新消息</view>
-    <view v-else-if="isAiPrivate && messages.length === 0" class="banner tip">可以直接发图片或语音，Kimi 会识别并回应</view>
+    <view v-else-if="isAiPrivate && messages.length === 0" class="banner tip">可以直接发图片，Kimi 会识别并回应</view>
     <scroll-view
       scroll-y
       class="msgs"
@@ -290,7 +290,7 @@
           <button v-if="!voiceMode" class="send pc-btn" :class="{ sending: sendPulse }" @tap="send">发送</button>
         </view>
         <view class="tools">
-          <view class="tool pc-press" :class="{ active: voiceMode }" @tap="toggleVoiceMode">
+          <view v-if="!isAiPrivate" class="tool pc-press" :class="{ active: voiceMode }" @tap="toggleVoiceMode">
             <view class="tool-ico ico-mic">
               <view class="ico-mic__head"></view>
               <view class="ico-mic__arc"></view>
@@ -2512,6 +2512,10 @@ function dismissAuxInput() {
 }
 
 function toggleVoiceMode() {
+  if (isAiPrivate.value) {
+    voiceMode.value = false
+    return
+  }
   voiceMode.value = !voiceMode.value
   if (voiceMode.value) closeAuxPanels()
 }
