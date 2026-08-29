@@ -40,6 +40,8 @@ import {
   batchUploadStickers,
   formatStickerAddToast
 } from '../../utils/sticker.js'
+import { pickImages } from '../../utils/media-pick.js'
+import { isPickCancel } from '../../utils/media-msg.js'
 
 const props = defineProps({
   show: { type: Boolean, default: false }
@@ -73,38 +75,43 @@ function pick(s) {
 }
 
 /** 复用管理页同款：选图 → 上传 → batchAdd（后端默认插到最前） */
-function addStickers() {
+async function addStickers() {
   const remain = max - list.value.length
   if (remain <= 0) {
     uni.showToast({ title: '已达上限 100 个', icon: 'none' })
     return
   }
-  uni.chooseImage({
-    count: Math.min(9, remain),
-    sizeType: ['compressed'],
-    success: async (res) => {
-      const paths = res.tempFilePaths || []
-      if (!paths.length) return
-      uni.showLoading({ title: '上传中', mask: true })
-      try {
-        const { created, added, skipped } = await batchUploadStickers(api, res, {
-          currentCount: list.value.length,
-          max
-        })
-        if (!added) {
-          uni.showToast({ title: formatStickerAddToast(0, skipped), icon: 'none' })
-          return
-        }
-        list.value = [...created, ...list.value]
-        uni.showToast({ title: formatStickerAddToast(added, skipped), icon: 'none' })
-      } catch (e) {
-        uni.showToast({ title: e?.message || '添加失败', icon: 'none' })
-        await load()
-      } finally {
-        uni.hideLoading()
-      }
+  let res
+  try {
+    res = await pickImages({
+      count: Math.min(9, remain),
+      sizeType: ['compressed']
+    })
+  } catch (e) {
+    if (isPickCancel(e)) return
+    uni.showToast({ title: e?.message || '无法打开相册', icon: 'none' })
+    return
+  }
+  const paths = res.tempFilePaths || []
+  if (!paths.length) return
+  uni.showLoading({ title: '上传中', mask: true })
+  try {
+    const { created, added, skipped } = await batchUploadStickers(api, res, {
+      currentCount: list.value.length,
+      max
+    })
+    if (!added) {
+      uni.showToast({ title: formatStickerAddToast(0, skipped), icon: 'none' })
+      return
     }
-  })
+    list.value = [...created, ...list.value]
+    uni.showToast({ title: formatStickerAddToast(added, skipped), icon: 'none' })
+  } catch (e) {
+    uni.showToast({ title: e?.message || '添加失败', icon: 'none' })
+    await load()
+  } finally {
+    uni.hideLoading()
+  }
 }
 
 watch(() => props.show, (v) => {

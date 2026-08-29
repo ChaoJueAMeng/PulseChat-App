@@ -75,9 +75,11 @@
                 class="bubble"
                 :class="{
                   active: menuMsg && menuMsg.id === m.id,
-                  sticker: m.msgType === MSG_EMOJI,
-                  media: m.msgType === 2 && !m.__imageCaption && m.__imageCount <= 1,
-                  'img-with-caption': m.msgType === 2 && (!!m.__imageCaption || m.__imageCount > 1)
+                  sticker: !isRecalledMsg(m) && m.msgType === MSG_EMOJI,
+                  media: !isRecalledMsg(m) && ((m.msgType === 2 && !m.__imageCaption && m.__imageCount <= 1) || m.msgType === MSG_VIDEO),
+                  file: !isRecalledMsg(m) && m.msgType === MSG_FILE,
+                  'img-with-caption': !isRecalledMsg(m) && m.msgType === 2 && (!!m.__imageCaption || m.__imageCount > 1),
+                  recalled: isRecalledMsg(m)
                 }"
                 @touchstart="onBubbleTouchStart(m, $event)"
                 @touchmove="onBubbleTouchMove"
@@ -85,14 +87,15 @@
                 @touchcancel="onBubbleTouchCancel"
               >
                 <view
-                  v-if="replyOf(m)"
+                  v-if="!isRecalledMsg(m) && replyOf(m)"
                   class="quote-card pc-press"
                   @tap.stop="scrollToQuoted(replyOf(m))"
                 >
                   <text class="quote-name">{{ replyOf(m).senderName || '用户' }}</text>
                   <text class="quote-text">{{ replyOf(m).content || '[消息]' }}</text>
                 </view>
-                <template v-if="m.msgType === 2">
+                <text v-if="isRecalledMsg(m)" class="txt recall-txt">{{ m.content || '消息已撤回' }}</text>
+                <template v-else-if="m.msgType === 2">
                   <view
                     class="img-album"
                     :class="[
@@ -141,10 +144,36 @@
                   </view>
                   <text v-if="voiceTranscriptOf(m)" class="voice-transcript" :class="{ mine: m.mine }">{{ voiceTranscriptOf(m) }}</text>
                 </view>
+                <view
+                  v-else-if="m.msgType === MSG_VIDEO"
+                  class="video-card pc-press"
+                  @tap.stop="openVideoMsg(m)"
+                >
+                  <view class="video-card__cover">
+                    <view class="video-card__play">
+                      <view class="video-card__play-tri"></view>
+                    </view>
+                    <text v-if="videoDurationOf(m)" class="video-card__dur">{{ videoDurationOf(m) }}</text>
+                  </view>
+                </view>
+                <view
+                  v-else-if="m.msgType === MSG_FILE"
+                  class="file-card pc-press"
+                  @tap.stop="openFileMsg(m)"
+                >
+                  <view class="file-ico">
+                    <view class="file-ico__tab"></view>
+                    <view class="file-ico__body"></view>
+                  </view>
+                  <view class="file-meta">
+                    <text class="file-name">{{ fileNameOf(m) }}</text>
+                    <text v-if="fileSizeOf(m)" class="file-size">{{ fileSizeOf(m) }}</text>
+                  </view>
+                </view>
                 <text v-else class="txt">{{ m.content }}</text>
                 <text v-if="m.streaming" class="cursor">▍</text>
               </view>
-              <view v-if="reactionChips(m).length" class="react-strip" :class="{ mine: m.mine }">
+              <view v-if="!isRecalledMsg(m) && reactionChips(m).length" class="react-strip" :class="{ mine: m.mine }">
                 <text
                   v-for="r in reactionChips(m)"
                   :key="r.emoji"
@@ -312,6 +341,12 @@
               <view class="ico-img__hill"></view>
             </view>
           </view>
+          <view v-if="!isAiPrivate" class="tool pc-press" @tap="pickVideo">
+            <view class="tool-ico ico-video">
+              <view class="ico-video__frame"></view>
+              <view class="ico-video__play"></view>
+            </view>
+          </view>
           <text class="tool pc-press" @tap="toggleAt">@</text>
           <text class="tool pc-press" @tap="addBot">AI</text>
         </view>
@@ -380,11 +415,25 @@ import { onLoad, onShow, onHide, onUnload, onBackPress } from '@dcloudio/uni-app
 import { api } from '../../utils/request.js'
 import { fullUrl } from '../../utils/url.js'
 import { getDisplayUrl, ensureCached, prefetchAll, forgetCached, cacheLocalAs, isLocalMediaPath } from '../../utils/image-cache.js'
+import {
+  peekVideoCached,
+  abortVideoDownload,
+  prefetchVideos,
+  cacheVideoLocalAs
+} from '../../utils/video-cache.js'
 import { getStore } from '../../store/index.js'
 import { subscribeConversation, onWs, sendStomp } from '../../utils/ws.js'
 import { getBackground, syncBackgroundFromDetail } from '../../utils/chat-settings.js'
+import {
+  getCachedMessages,
+  setCachedMessages,
+  scheduleCacheMessages,
+  clearCachedMessages
+} from '../../utils/message-cache.js'
 import { MSG_VOICE, parseVoiceExtra, formatVoiceDuration, voiceTranscriptText } from '../../utils/voice.js'
 import { MSG_EMOJI } from '../../utils/sticker.js'
+import { MSG_VIDEO, MSG_FILE, isPickCancel, formatFileSize } from '../../utils/media-msg.js'
+import { pickImages, pickVideos } from '../../utils/media-pick.js'
 import {
   getReplyMeta,
   getCaption,
@@ -395,14 +444,17 @@ import {
   setReaction,
   buildReplyExtra,
   msgPreviewText,
-  stringifyExtra
+  stringifyExtra,
+  parseExtra
 } from '../../utils/msg-extra.js'
 import { handlePageBackPress } from '../../utils/quit.js'
 import {
   feedbackState,
   updatePreviewAlbum,
   setPreviewReachEarlierHandler,
-  closePreview
+  closePreview,
+  openVideoPlayer,
+  closeVideoPlayer
 } from '../../utils/feedback.js'
 import {
   TAB_SWIPE_LEAVE_MS,
@@ -430,6 +482,14 @@ import PcChatMorePanel from '../../components/pc-chat-more-panel/pc-chat-more-pa
 const instance = getCurrentInstance()
 
 onBackPress(() => {
+  if (feedbackState.videoPlayer.show) {
+    closeVideoPlayer()
+    return true
+  }
+  if (feedbackState.preview.show) {
+    closePreview()
+    return true
+  }
   if (menuMsg.value) {
     closeMsgMenu()
     return true
@@ -973,6 +1033,17 @@ async function resolveChatBackground(raw) {
     const local = await ensureCached(raw)
     if (local) chatBgDisplay.value = local
   } catch (e) {}
+}
+
+function applyConversationDetail(detail) {
+  if (!detail) return
+  members.value = detail.members || []
+  convType.value = detail.type || 1
+  ownerId.value = detail.ownerId != null ? Number(detail.ownerId) : null
+  peer.value = detail.peer || null
+  if (detail.title) title.value = detail.title
+  restoreAiStream(detail)
+  chatBg.value = syncBackgroundFromDetail(conversationId.value, detail)
 }
 
 function initNavBarLayout(sys) {
@@ -1547,25 +1618,31 @@ onLoad(async (q) => {
   title.value = decodeURIComponent(q.title || '聊天')
   // 尽早预挂载「更多」层，避免首滑中途创建 DOM 造成跟手卡顿
   ensureMoreMounted()
-  chatBg.value = getBackground(conversationId.value)
-  await resolveChatBackground(chatBg.value)
+  resolveChatBackground(getBackground(conversationId.value)).catch(() => {})
   bindConversationSubscription()
-  await loadHistory()
-  const detail = await api.conversation(conversationId.value)
-  members.value = detail.members || []
-  convType.value = detail.type || 1
-  ownerId.value = detail.ownerId != null ? Number(detail.ownerId) : null
-  peer.value = detail.peer || null
-  if (detail.title) title.value = detail.title
-  restoreAiStream(detail)
-  chatBg.value = syncBackgroundFromDetail(conversationId.value, detail)
-  await resolveChatBackground(chatBg.value)
+  const cached = getCachedMessages(conversationId.value)
+  if (cached.length) {
+    messages.value = cached.map((msg) => normalizeMsg(msg))
+    hasMoreHistory.value = cached.length >= HISTORY_PAGE_SIZE
+    scrollToBottom(false, true)
+    prefetchMsgMedia(messages.value)
+  }
+  let detail = null
+  const settled = await Promise.allSettled([
+    loadHistory(),
+    api.conversation(conversationId.value)
+  ])
+  if (settled[1].status === 'fulfilled') {
+    detail = settled[1].value
+  }
+  applyConversationDetail(detail)
+  restoreDraft(detail)
+  resolveChatBackground(chatBg.value).catch(() => {})
   if (convType.value === 1 && peer.value && !peer.value.bot) {
-    await loadFriendStatus()
+    loadFriendStatus().catch(() => {})
   } else {
     isFriend.value = false
   }
-  restoreDraft(detail)
   if (messages.value.length) {
     markConversationRead(messages.value[messages.value.length - 1].id, true)
   }
@@ -1583,22 +1660,16 @@ onShow(async () => {
   if (!conversationId.value) return
   try {
     const detail = await api.conversation(conversationId.value)
-    members.value = detail.members || []
-    convType.value = detail.type || 1
-    ownerId.value = detail.ownerId != null ? Number(detail.ownerId) : null
-    peer.value = detail.peer || null
-    if (detail.title) title.value = detail.title
-    restoreAiStream(detail)
-    chatBg.value = syncBackgroundFromDetail(conversationId.value, detail)
+    applyConversationDetail(detail)
   } catch (e) {
     chatBg.value = getBackground(conversationId.value)
   }
-  await resolveChatBackground(chatBg.value)
+  resolveChatBackground(chatBg.value).catch(() => {})
   if (!isPrivateHuman.value) {
     clearRemoteTyping()
   }
   if (convType.value === 1 && peer.value && !peer.value.bot) {
-    await loadFriendStatus()
+    loadFriendStatus().catch(() => {})
   }
   // 从「清空聊天记录」返回时，同步重拉空历史
   if (consumeClearedFlag(conversationId.value)) {
@@ -1623,6 +1694,9 @@ onUnload(() => {
   clearRemoteTyping()
   clearDraftPersistTimer()
   persistDraftNow()
+  if (conversationId.value && messages.value.length) {
+    setCachedMessages(conversationId.value, messages.value)
+  }
   unbindConversationSubscription()
   const store = getStore()
   // 离开前先落本地已读水位并清红点，再清 activeChatId，避免迟到 WS 把未读写回
@@ -1636,6 +1710,7 @@ onUnload(() => {
     store.setActiveChatId(null)
   }
   previewEarlierLock = false
+  if (feedbackState.videoPlayer.show) closeVideoPlayer()
   if (feedbackState.preview.show) closePreview()
   else setPreviewReachEarlierHandler(null)
 })
@@ -1892,6 +1967,7 @@ async function loadHistory(beforeId) {
   if (!beforeId) {
     messages.value = rows
     hasMoreHistory.value = rows.length >= HISTORY_PAGE_SIZE
+    setCachedMessages(conversationId.value, rows)
     // 首次加载：无动画 + 多次 settle，展示最新消息
     scrollToBottom(false, true)
     // 首屏内容较矮时静默补拉，避免一上滑就顶到头
@@ -1906,8 +1982,10 @@ async function loadHistory(beforeId) {
     if (!rows.length || rows.length < HISTORY_PAGE_SIZE) {
       hasMoreHistory.value = false
     }
+    // 缓存仍只保留最近一页，便于下次进房秒开
+    scheduleCacheMessages(conversationId.value, messages.value)
   }
-  prefetchAll(rows.flatMap((m) => mediaPrefetchTargets(m)))
+  prefetchMsgMedia(rows)
   return rows
 }
 
@@ -1931,11 +2009,13 @@ async function applyLocalHistoryCleared() {
   typingText.value = ''
   aiDeltaMap = Object.create(null)
   clearTimeout(aiFlushTimer)
+  clearCachedMessages(conversationId.value)
   try {
     await loadHistory()
   } catch (e) {
     messages.value = []
     hasMoreHistory.value = false
+    clearCachedMessages(conversationId.value)
   }
 }
 
@@ -2182,6 +2262,7 @@ function upsertMsg(msg) {
     if (idx >= 0) {
       messages.value[idx] = normalizeMsg({ ...messages.value[idx], ...msg, streaming: false })
       delete streamingMap.value[msg.clientMsgId]
+      scheduleCacheMessages(conversationId.value, messages.value)
       return
     }
   }
@@ -2189,10 +2270,12 @@ function upsertMsg(msg) {
   if (existIdx >= 0) {
     // 原地更新，避免整表 map 重建
     messages.value[existIdx] = normalizeMsg({ ...messages.value[existIdx], ...msg })
+    scheduleCacheMessages(conversationId.value, messages.value)
     return
   }
   messages.value.push(msg)
-  prefetchAll(mediaPrefetchTargets(msg))
+  prefetchMsgMedia(msg)
+  scheduleCacheMessages(conversationId.value, messages.value)
 }
 
 function flushAiDeltas() {
@@ -2851,21 +2934,151 @@ function pickImage() {
     uni.showToast({ title: `最多选择 ${STAGE_IMAGE_MAX} 张`, icon: 'none' })
     return
   }
-  uni.chooseImage({
-    count: remain,
-    success: (res) => {
-      const files = res.tempFilePaths || []
-      if (!files.length) return
-      voiceMode.value = false
-      const next = stagedImages.value.slice()
-      files.forEach((file) => {
-        if (next.length >= STAGE_IMAGE_MAX) return
-        stagedImageSeq += 1
-        next.push({ id: 's' + stagedImageSeq, localPath: file })
-      })
-      stagedImages.value = next
-    }
+  pickImages({ count: remain }).then((res) => {
+    const files = res.tempFilePaths || []
+    if (!files.length) return
+    voiceMode.value = false
+    const next = stagedImages.value.slice()
+    files.forEach((file) => {
+      if (next.length >= STAGE_IMAGE_MAX) return
+      stagedImageSeq += 1
+      next.push({ id: 's' + stagedImageSeq, localPath: file })
+    })
+    stagedImages.value = next
+  }).catch((e) => {
+    if (isPickCancel(e)) return
+    uni.showToast({ title: e?.message || '无法选择图片', icon: 'none' })
   })
+}
+
+function compactExtra(obj) {
+  const out = {}
+  Object.keys(obj || {}).forEach((k) => {
+    const v = obj[k]
+    if (v == null || v === '') return
+    out[k] = v
+  })
+  return out
+}
+
+async function sendUploadedAttachment({ path, category, msgType, extra }) {
+  uni.showLoading({ title: '发送中…', mask: true })
+  try {
+    const up = await api.upload(path, { category })
+    if (!up?.url) throw new Error('上传成功但未返回文件地址')
+    if (msgType === MSG_VIDEO) {
+      try { await cacheVideoLocalAs(up.url, path) } catch (e) {}
+    }
+    const base = compactExtra(extra)
+    const extraJson = replyTarget.value?.msg
+      ? buildReplyExtra(replyTarget.value.msg, replyTarget.value.name, base)
+      : (Object.keys(base).length ? stringifyExtra(base) : undefined)
+    const payload = {
+      conversationId: conversationId.value,
+      content: up.url,
+      msgType
+    }
+    if (extraJson) payload.extraJson = extraJson
+    uni.vibrateShort && uni.vibrateShort({})
+    const msg = await api.sendMessage(payload)
+    clearReply()
+    upsertMsg(msg)
+    scrollToBottom(true)
+  } catch (e) {
+    showSendError(e)
+  } finally {
+    uni.hideLoading()
+  }
+}
+
+async function pickVideo() {
+  closeEmojiPanel()
+  try {
+    const picked = await pickVideos()
+    await sendUploadedAttachment({
+      path: picked.path,
+      category: 'video',
+      msgType: MSG_VIDEO,
+      extra: {
+        name: picked.name,
+        size: picked.size,
+        duration: picked.duration,
+        width: picked.width,
+        height: picked.height
+      }
+    })
+  } catch (e) {
+    if (isPickCancel(e)) return
+    uni.showToast({ title: e?.message || '无法选择视频', icon: 'none' })
+  }
+}
+
+function fileNameOf(m) {
+  const extra = parseExtra(m?.extraJson)
+  const name = extra.name == null ? '' : String(extra.name).trim()
+  return name || '文件'
+}
+
+function fileSizeOf(m) {
+  const extra = parseExtra(m?.extraJson)
+  return formatFileSize(extra.size)
+}
+
+function videoDurationOf(m) {
+  const extra = parseExtra(m?.extraJson)
+  const sec = Number(extra.duration)
+  if (!Number.isFinite(sec) || sec <= 0) return ''
+  return formatVoiceDuration(sec)
+}
+
+async function openVideoMsg(m) {
+  if (isRecalledMsg(m)) return
+  const sourceUrl = m?.content
+  if (!sourceUrl || String(sourceUrl).trim() === '消息已撤回') {
+    uni.showToast({ title: '视频地址无效', icon: 'none' })
+    return
+  }
+  stopVoicePlayback()
+  const remote = fullUrl(sourceUrl)
+  const extra = parseExtra(m?.extraJson)
+  const title = (extra.name == null ? '' : String(extra.name).trim()) || '视频'
+  // 播放远程 URL 时不要同时后台下载同一文件（抢带宽会卡顿）
+  abortVideoDownload(sourceUrl)
+  abortVideoDownload(remote)
+  // 已有本地缓存则播本地，否则直接播远程；打开后不再换 src
+  const cached = peekVideoCached(sourceUrl)
+  openVideoPlayer({
+    src: cached || remote,
+    sourceUrl: remote,
+    title
+  })
+}
+
+async function openFileMsg(m) {
+  const url = fullUrl(m?.content)
+  if (!url) {
+    uni.showToast({ title: '文件地址无效', icon: 'none' })
+    return
+  }
+  uni.showLoading({ title: '打开中…', mask: true })
+  try {
+    const dl = await new Promise((resolve, reject) => {
+      uni.downloadFile({ url, success: resolve, fail: reject })
+    })
+    if (dl.statusCode && dl.statusCode !== 200) throw new Error('下载失败')
+    await new Promise((resolve, reject) => {
+      uni.openDocument({
+        filePath: dl.tempFilePath,
+        showMenu: true,
+        success: resolve,
+        fail: reject
+      })
+    })
+  } catch (e) {
+    uni.showToast({ title: e?.message || '无法打开文件', icon: 'none' })
+  } finally {
+    uni.hideLoading()
+  }
 }
 
 function removeStagedImage(idx) {
@@ -2898,11 +3111,29 @@ function normalizeMsg(msg) {
   }
 }
 
+/** 后端撤回只改 status=2 / content，不改 msgType；UI 必须以 status 为准 */
+function isRecalledMsg(m) {
+  return !!m && Number(m.status) === 2
+}
+
 function mediaPrefetchTargets(msg) {
-  if (!msg) return []
+  if (!msg || isRecalledMsg(msg)) return []
   if (msg.msgType === 2) return imageUrlsOf(msg)
   if (msg.msgType === MSG_EMOJI && msg.content) return [msg.content]
   return []
+}
+
+function videoPrefetchTargets(msg) {
+  if (!msg || isRecalledMsg(msg) || msg.msgType !== MSG_VIDEO || !msg.content) return []
+  return [msg.content]
+}
+
+function prefetchMsgMedia(list) {
+  const msgs = Array.isArray(list) ? list : (list ? [list] : [])
+  prefetchAll(msgs.flatMap((m) => mediaPrefetchTargets(m)))
+  // 播放中不要再后台拉视频，避免和播放器抢带宽导致卡顿
+  if (feedbackState.videoPlayer.show) return
+  prefetchVideos(msgs.flatMap((m) => videoPrefetchTargets(m)))
 }
 
 /** 可进入聊天图片/表情包相册的消息 */
@@ -3199,18 +3430,21 @@ const menuActions = computed(() => {
   if (!m) return []
   const list = [
     { key: 'copy', label: '复制', icon: '⎘' },
-    { key: 'forward', label: '转发', icon: '↗' },
     { key: 'quote', label: '引用', icon: '❝' },
     { key: 'delete', label: '删除', icon: '⌫', danger: true }
   ]
+  if (m.msgType !== MSG_FILE) {
+    list.splice(1, 0, { key: 'forward', label: '转发', icon: '↗' })
+  }
   // 图片 / 表情包消息：可加入我的表情包
   const canAddSticker = m.msgType === MSG_EMOJI
     ? !!m.content
     : m.msgType === 2 && imageUrlsOf(m).length > 0
   if (canAddSticker) {
-    list.splice(2, 0, { key: 'addSticker', label: '添加表情', icon: '☆' })
+    const quoteIdx = list.findIndex(a => a.key === 'quote')
+    list.splice(quoteIdx >= 0 ? quoteIdx : list.length, 0, { key: 'addSticker', label: '添加表情', icon: '☆' })
   }
-  if (m.mine && m.id && m.msgType !== 4) {
+  if (m.mine && m.id && m.msgType !== 4 && !isRecalledMsg(m)) {
     const delIdx = list.findIndex(a => a.key === 'delete')
     list.splice(delIdx >= 0 ? delIdx : list.length, 0, { key: 'recall', label: '撤回', icon: '↶' })
   }
@@ -3242,7 +3476,7 @@ function cancelBubbleLongPress(markMoved = false) {
 function onBubbleTouchStart(m, e) {
   const p = pickTouchPoint(e)
   if (p) lastBubbleTouch.value = p
-  if (!m || m.msgType === 4 || m.streaming) return
+  if (!m || m.msgType === 4 || isRecalledMsg(m) || m.streaming) return
   clearBubbleLongPressTimer()
   bubblePressState.active = true
   bubblePressState.moved = false
@@ -3307,7 +3541,7 @@ function resolveLongPressStickerUrl(m, point, imgRects) {
 }
 
 function onMsgLong(m, e) {
-  if (!m || m.msgType === 4 || m.streaming) return
+  if (!m || m.msgType === 4 || isRecalledMsg(m) || m.streaming) return
   closeAuxPanels()
   const touch = pickTouchPoint(e) || lastBubbleTouch.value || null
   const urls = m.msgType === 2 ? imageUrlsOf(m) : []
@@ -3387,6 +3621,7 @@ function patchMsgExtra(msgId, extraJson) {
   const idx = messages.value.findIndex(x => Number(x.id) === Number(msgId))
   if (idx < 0) return
   messages.value[idx] = normalizeMsg({ ...messages.value[idx], extraJson })
+  scheduleCacheMessages(conversationId.value, messages.value)
 }
 
 function applyRemoteReaction(payload) {
@@ -3465,6 +3700,24 @@ function copyMessage(m) {
     uni.showToast({ title: '语音消息无法复制', icon: 'none' })
     return
   }
+  if (m.msgType === MSG_FILE) {
+    uni.showToast({ title: '文件消息无法复制', icon: 'none' })
+    return
+  }
+  if (m.msgType === MSG_VIDEO) {
+    const url = fullUrl(m.content) || ''
+    const name = fileNameOf(m)
+    const data = name ? (name + '\n' + url) : url
+    if (!data.trim()) {
+      uni.showToast({ title: '无内容可复制', icon: 'none' })
+      return
+    }
+    uni.setClipboardData({
+      data,
+      success: () => uni.showToast({ title: '已复制', icon: 'none' })
+    })
+    return
+  }
   const content = String(m.content || '')
   if (!content) {
     uni.showToast({ title: '无内容可复制', icon: 'none' })
@@ -3512,11 +3765,16 @@ function deleteMessage(m) {
         x => (m.id && x.id === m.id) || (m.clientMsgId && x.clientMsgId === m.clientMsgId)
       )
       if (idx >= 0) messages.value.splice(idx, 1)
+      scheduleCacheMessages(conversationId.value, messages.value)
     }
   })
 }
 
 async function openForward(m) {
+  if (m?.msgType === MSG_FILE) {
+    uni.showToast({ title: '不支持转发文件消息', icon: 'none' })
+    return
+  }
   forwardSource.value = m
   showForward.value = true
   try {
@@ -3553,6 +3811,17 @@ async function confirmForward(conv) {
     const urls = imageUrlsOf(m)
     if (cap) base.caption = cap
     if (urls.length > 1) base.images = urls
+    if (Object.keys(base).length) payload.extraJson = stringifyExtra(base)
+  } else if (m.msgType === MSG_VIDEO) {
+    const extra = parseExtra(m.extraJson)
+    const base = compactExtra({
+      name: extra.name,
+      size: extra.size,
+      mime: extra.mime,
+      duration: extra.duration,
+      width: extra.width,
+      height: extra.height
+    })
     if (Object.keys(base).length) payload.extraJson = stringifyExtra(base)
   }
   try {
@@ -3817,6 +4086,13 @@ page {
 .ai .bubble {
   border-color: rgba(244, 63, 94, 0.32);
 }
+.bubble.recalled {
+  opacity: 0.78;
+}
+.recall-txt {
+  color: $pc-muted;
+  font-style: italic;
+}
 .quote-card {
   margin: -4rpx 0 14rpx;
   padding: 12rpx 14rpx;
@@ -3937,14 +4213,16 @@ page {
   display: block;
 }
 .bubble.sticker,
-.bubble.media {
+.bubble.media,
+.bubble.file {
   padding: 8rpx;
   background: transparent;
   border-color: transparent;
   box-shadow: none;
 }
 .mine .bubble.sticker,
-.mine .bubble.media {
+.mine .bubble.media,
+.mine .bubble.file {
   background: transparent;
   border-color: transparent;
 }
@@ -3956,6 +4234,117 @@ page {
   margin-top: 12rpx;
   padding: 0 12rpx;
 }
+.video-card {
+  width: 420rpx;
+  max-width: 100%;
+  border-radius: $pc-radius-md;
+  overflow: hidden;
+  background: rgba(28, 16, 48, 0.72);
+  border: 1px solid rgba(167, 139, 250, 0.2);
+}
+.video-card__cover {
+  position: relative;
+  width: 100%;
+  height: 280rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background:
+    radial-gradient(ellipse at 35% 30%, rgba(124, 58, 237, 0.35) 0%, transparent 55%),
+    radial-gradient(ellipse at 70% 75%, rgba(244, 63, 94, 0.22) 0%, transparent 50%),
+    linear-gradient(160deg, rgba(20, 12, 36, 0.95), rgba(40, 18, 64, 0.9));
+}
+.video-card__play {
+  width: 84rpx;
+  height: 84rpx;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(124, 58, 237, 0.42);
+  border: 2rpx solid rgba(196, 181, 253, 0.55);
+  box-shadow: 0 8rpx 24rpx rgba(10, 6, 20, 0.35);
+}
+.video-card__play-tri {
+  width: 0;
+  height: 0;
+  margin-left: 6rpx;
+  border-top: 14rpx solid transparent;
+  border-bottom: 14rpx solid transparent;
+  border-left: 22rpx solid #F5EDFF;
+}
+.video-card__dur {
+  position: absolute;
+  right: 14rpx;
+  bottom: 12rpx;
+  padding: 4rpx 12rpx;
+  border-radius: 999rpx;
+  font-size: 22rpx;
+  color: rgba(245, 237, 255, 0.9);
+  background: rgba(10, 6, 20, 0.55);
+}
+.file-card {
+  display: flex;
+  align-items: center;
+  gap: 16rpx;
+  min-width: 280rpx;
+  max-width: 420rpx;
+  padding: 16rpx 18rpx;
+  border-radius: $pc-radius-md;
+  background: rgba(28, 16, 48, 0.72);
+  border: 1px solid rgba(167, 139, 250, 0.22);
+}
+.mine .file-card {
+  background: rgba(124, 58, 237, 0.28);
+  border-color: rgba(167, 139, 250, 0.32);
+}
+.file-ico {
+  position: relative;
+  width: 44rpx;
+  height: 40rpx;
+  flex-shrink: 0;
+}
+.file-ico__tab {
+  position: absolute;
+  left: 2rpx;
+  top: 2rpx;
+  width: 16rpx;
+  height: 10rpx;
+  border: 2.5rpx solid rgba(196, 181, 253, 0.85);
+  border-bottom: none;
+  border-radius: 6rpx 6rpx 0 0;
+  background: transparent;
+  box-sizing: border-box;
+}
+.file-ico__body {
+  position: absolute;
+  left: 2rpx;
+  top: 10rpx;
+  width: 40rpx;
+  height: 28rpx;
+  border: 2.5rpx solid rgba(196, 181, 253, 0.85);
+  border-radius: 0 8rpx 8rpx 8rpx;
+  background: transparent;
+  box-sizing: border-box;
+}
+.file-meta {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6rpx;
+}
+.file-name {
+  font-size: 26rpx;
+  line-height: 1.35;
+  color: $pc-text;
+  word-break: break-all;
+}
+.file-size {
+  font-size: 22rpx;
+  color: $pc-muted;
+}
+.mine .file-size { color: rgba(245, 237, 255, 0.72); }
 .aux-dismiss-mask {
   position: fixed;
   left: 0;
@@ -4180,6 +4569,7 @@ page {
 }
 .tools {
   display: flex;
+  flex-wrap: wrap;
   gap: 10rpx;
   flex-shrink: 0;
   padding-top: 2rpx;
@@ -4268,6 +4658,28 @@ $tool-ico-lit: #C4B5FD;
   border-bottom: 9rpx solid $tool-ico-idle;
   transition: border-bottom-color 0.2s ease;
 }
+.ico-video__frame {
+  position: absolute;
+  left: 2rpx;
+  top: 6rpx;
+  width: 30rpx;
+  height: 22rpx;
+  border-radius: 6rpx;
+  border: 2.5rpx solid $tool-ico-idle;
+  background: transparent;
+  transition: border-color 0.2s ease;
+}
+.ico-video__play {
+  position: absolute;
+  left: 14rpx;
+  top: 11rpx;
+  width: 0;
+  height: 0;
+  border-top: 6rpx solid transparent;
+  border-bottom: 6rpx solid transparent;
+  border-left: 9rpx solid $tool-ico-idle;
+  transition: border-left-color 0.2s ease;
+}
 .ico-heart__l,
 .ico-heart__r {
   position: absolute;
@@ -4298,8 +4710,10 @@ $tool-ico-lit: #C4B5FD;
 .tool:active .ico-heart__l,
 .tool:active .ico-heart__r,
 .tool:active .ico-heart__tip { background: $tool-ico-lit; }
-.tool:active .ico-img__frame { border-color: $tool-ico-lit; }
+.tool:active .ico-img__frame,
+.tool:active .ico-video__frame { border-color: $tool-ico-lit; }
 .tool:active .ico-img__hill { border-bottom-color: $tool-ico-lit; }
+.tool:active .ico-video__play { border-left-color: $tool-ico-lit; }
 .tool.active .ico-mic__head {
   border-color: $pc-purple;
   background: rgba(167, 139, 250, 0.22);

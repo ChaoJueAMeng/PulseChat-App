@@ -81,6 +81,8 @@ import { cacheLocalAs, getDisplayUrl } from '../../utils/image-cache.js'
 import { isPinned, syncBackgroundFromDetail } from '../../utils/chat-settings.js'
 import { getStore } from '../../store/index.js'
 import { showModal } from '../../utils/feedback.js'
+import { pickImages } from '../../utils/media-pick.js'
+import { isPickCancel } from '../../utils/media-msg.js'
 import { handlePageBackPress } from '../../utils/quit.js'
 import PcAvatar from '../../components/pc-avatar/pc-avatar.vue'
 
@@ -361,27 +363,31 @@ async function pickChatBackground() {
     }
     return
   }
-  uni.chooseImage({
-    count: 1,
-    success: async (imgRes) => {
-      const path = imgRes.tempFilePaths[0]
-      uni.showLoading({ title: '设置中…', mask: true })
-      try {
-        const up = await api.upload(path)
-        const url = up.url || ''
-        if (!url) throw new Error('上传失败')
-        await cacheLocalAs(url, path)
-        const detail = await api.updateConvSettings(id, { background: url })
-        const saved = syncBackgroundFromDetail(id, detail || { background: url })
-        chatBg.value = saved || url
-        uni.showToast({ title: '背景已设置', icon: 'none' })
-      } catch (e) {
-        uni.showToast({ title: e?.message || '设置失败', icon: 'none' })
-      } finally {
-        uni.hideLoading()
-      }
-    }
-  })
+  let path
+  try {
+    const imgRes = await pickImages({ count: 1 })
+    path = imgRes.tempFilePaths?.[0]
+  } catch (e) {
+    if (isPickCancel(e)) return
+    uni.showToast({ title: e?.message || '无法打开相册', icon: 'none' })
+    return
+  }
+  if (!path) return
+  uni.showLoading({ title: '设置中…', mask: true })
+  try {
+    const up = await api.upload(path)
+    const url = up.url || ''
+    if (!url) throw new Error('上传失败')
+    await cacheLocalAs(url, path)
+    const detail = await api.updateConvSettings(id, { background: url })
+    const saved = syncBackgroundFromDetail(id, detail || { background: url })
+    chatBg.value = saved || url
+    uni.showToast({ title: '背景已设置', icon: 'none' })
+  } catch (e) {
+    uni.showToast({ title: e?.message || '设置失败', icon: 'none' })
+  } finally {
+    uni.hideLoading()
+  }
 }
 
 function confirmDeleteFriend() {

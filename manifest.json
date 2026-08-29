@@ -8,6 +8,7 @@
     "app-plus" : {
         "usingComponents" : true,
         "nvueStyleCompiler" : "uni-app",
+        "runmode" : "liberate",
         "splashscreen" : {
             "alwaysShowBeforeRender" : false,
             "waiting" : false,
@@ -17,7 +18,8 @@
         "modules" : {
             "Push" : {},
             "Camera" : {},
-            "Record" : {}
+            "Record" : {},
+            "VideoPlayer" : {}
         },
         "distribute" : {
             "android" : {
@@ -30,16 +32,19 @@
                     "<uses-permission android:name=\"android.permission.ACCESS_WIFI_STATE\"/>",
                     "<uses-permission android:name=\"android.permission.WRITE_EXTERNAL_STORAGE\"/>",
                     "<uses-permission android:name=\"android.permission.READ_EXTERNAL_STORAGE\"/>",
-                    "<uses-permission android:name=\"android.permission.READ_MEDIA_IMAGES\"/>",
                     "<uses-permission android:name=\"android.permission.POST_NOTIFICATIONS\"/>",
                     "<uses-permission android:name=\"android.permission.RECEIVE_USER_PRESENT\"/>",
                     "<uses-permission android:name=\"android.permission.WAKE_LOCK\"/>"
+                ],
+                "excludePermissions" : [
+                    "<uses-permission android:name=\"android.permission.READ_MEDIA_IMAGES\"/>",
+                    "<uses-permission android:name=\"android.permission.READ_MEDIA_VIDEO\"/>"
                 ]
             },
             "ios" : {
                 "privacyDescription" : {
                     "NSMicrophoneUsageDescription" : "用于录制并发送语音消息",
-                    "NSPhotoLibraryUsageDescription" : "用于选择与保存聊天图片",
+                    "NSPhotoLibraryUsageDescription" : "用于选择与保存聊天图片、视频",
                     "NSPhotoLibraryAddUsageDescription" : "用于将图片保存到相册"
                 },
                 "dSYMs" : false,

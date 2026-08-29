@@ -1,20 +1,17 @@
 import { api } from './request.js'
 import { getStore } from '../store/index.js'
 import { cacheLocalAs } from './image-cache.js'
+import { pickImages } from './media-pick.js'
 
 /** 无自定义头像时的默认占位图（本地静态资源） */
 export const DEFAULT_AVATAR = '/static/avatar-default.png'
 
 /** 选择图片并上传头像，返回更新后的用户对象 */
 export async function pickAndUploadAvatar() {
-  const choose = await new Promise((resolve, reject) => {
-    uni.chooseImage({
-      count: 1,
-      sizeType: ['compressed'],
-      sourceType: ['album', 'camera'],
-      success: resolve,
-      fail: reject
-    })
+  const choose = await pickImages({
+    count: 1,
+    sizeType: ['compressed'],
+    sourceType: ['album', 'camera']
   })
   const filePath = choose.tempFilePaths?.[0]
   if (!filePath) {

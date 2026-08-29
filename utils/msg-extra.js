@@ -107,6 +107,7 @@ export function buildReplyExtra(target, senderName, baseExtra) {
 
 export function msgPreviewText(m, max = 48) {
   if (!m) return ''
+  if (Number(m.status) === 2) return '消息已撤回'
   if (m.msgType === 2) {
     const n = getImageUrls(m).length
     const prefix = n > 1 ? `[图片×${n}]` : '[图片]'
@@ -116,6 +117,17 @@ export function msgPreviewText(m, max = 48) {
   }
   if (m.msgType === 3) return '[表情]'
   if (m.msgType === 6) return '[语音]'
+  if (m.msgType === 7) {
+    const extra = parseExtra(m.extraJson)
+    const sec = Number(extra.duration)
+    return Number.isFinite(sec) && sec > 0 ? `[视频] ${Math.round(sec)}''` : '[视频]'
+  }
+  if (m.msgType === 8) {
+    const extra = parseExtra(m.extraJson)
+    const name = extra.name == null ? '' : String(extra.name).trim()
+    const prefix = name ? `[文件] ${name}` : '[文件]'
+    return prefix.length > max ? prefix.slice(0, max) + '…' : prefix
+  }
   if (m.msgType === 4) return '已撤回的消息'
   if (m.msgType === 5) return String(m.content || '').slice(0, max) || '[AI]'
   const raw = String(m.content || '').replace(/\s+/g, ' ').trim()

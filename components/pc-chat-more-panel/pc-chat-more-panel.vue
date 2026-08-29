@@ -133,6 +133,9 @@ import { fullUrl } from '../../utils/url.js'
 import { getStore } from '../../store/index.js'
 import { isPinned, syncBackgroundFromDetail } from '../../utils/chat-settings.js'
 import { cacheLocalAs, getDisplayUrl } from '../../utils/image-cache.js'
+import { clearCachedMessages } from '../../utils/message-cache.js'
+import { pickImages } from '../../utils/media-pick.js'
+import { isPickCancel } from '../../utils/media-msg.js'
 import PcAvatar from '../pc-avatar/pc-avatar.vue'
 
 const props = defineProps({
@@ -283,29 +286,31 @@ function previewAvatar() {
   uni.previewImage({ urls: [src], current: src })
 }
 
-function changeGroupAvatar() {
+async function changeGroupAvatar() {
   if (!isOwner.value) return
-  uni.chooseImage({
-    count: 1,
-    sizeType: ['compressed'],
-    success: async (res) => {
-      const path = res.tempFilePaths?.[0]
-      if (!path) return
-      uni.showLoading({ title: '上传中…', mask: true })
-      try {
-        const up = await api.upload(path, { category: 'avatar' })
-        const url = up.url || ''
-        if (url) await cacheLocalAs(url, path)
-        await api.updateGroup(Number(props.conversationId), { avatar: url })
-        avatar.value = url
-        uni.showToast({ title: '群头像已更新', icon: 'none' })
-      } catch (e) {
-        uni.showToast({ title: e?.message || '上传失败', icon: 'none' })
-      } finally {
-        uni.hideLoading()
-      }
-    }
-  })
+  let path
+  try {
+    const res = await pickImages({ count: 1, sizeType: ['compressed'] })
+    path = res.tempFilePaths?.[0]
+  } catch (e) {
+    if (isPickCancel(e)) return
+    uni.showToast({ title: e?.message || '无法打开相册', icon: 'none' })
+    return
+  }
+  if (!path) return
+  uni.showLoading({ title: '上传中…', mask: true })
+  try {
+    const up = await api.upload(path, { category: 'avatar' })
+    const url = up.url || ''
+    if (url) await cacheLocalAs(url, path)
+    await api.updateGroup(Number(props.conversationId), { avatar: url })
+    avatar.value = url
+    uni.showToast({ title: '群头像已更新', icon: 'none' })
+  } catch (e) {
+    uni.showToast({ title: e?.message || '上传失败', icon: 'none' })
+  } finally {
+    uni.hideLoading()
+  }
 }
 
 async function saveGroupInfo() {
@@ -422,28 +427,32 @@ async function pickChatBackground() {
     }
     return
   }
-  uni.chooseImage({
-    count: 1,
-    success: async (imgRes) => {
-      const path = imgRes.tempFilePaths[0]
-      uni.showLoading({ title: '设置中…', mask: true })
-      try {
-        const up = await api.upload(path)
-        const url = up.url || ''
-        if (!url) throw new Error('上传失败')
-        await cacheLocalAs(url, path)
-        const detail = await api.updateConvSettings(id, { background: url })
-        const saved = syncBackgroundFromDetail(id, detail || { background: url })
-        chatBg.value = saved || url
-        emit('background-changed', chatBg.value)
-        uni.showToast({ title: '背景已设置', icon: 'none' })
-      } catch (e) {
-        uni.showToast({ title: e?.message || '设置失败', icon: 'none' })
-      } finally {
-        uni.hideLoading()
-      }
-    }
-  })
+  let path
+  try {
+    const imgRes = await pickImages({ count: 1 })
+    path = imgRes.tempFilePaths?.[0]
+  } catch (e) {
+    if (isPickCancel(e)) return
+    uni.showToast({ title: e?.message || '无法打开相册', icon: 'none' })
+    return
+  }
+  if (!path) return
+  uni.showLoading({ title: '设置中…', mask: true })
+  try {
+    const up = await api.upload(path)
+    const url = up.url || ''
+    if (!url) throw new Error('上传失败')
+    await cacheLocalAs(url, path)
+    const detail = await api.updateConvSettings(id, { background: url })
+    const saved = syncBackgroundFromDetail(id, detail || { background: url })
+    chatBg.value = saved || url
+    emit('background-changed', chatBg.value)
+    uni.showToast({ title: '背景已设置', icon: 'none' })
+  } catch (e) {
+    uni.showToast({ title: e?.message || '设置失败', icon: 'none' })
+  } finally {
+    uni.hideLoading()
+  }
 }
 
 function confirmDeleteFriend() {
@@ -508,6 +517,7 @@ function confirmClearAiHistory() {
         try {
           uni.setStorageSync('pc_cleared_conv_' + props.conversationId, Date.now())
         } catch (e) {}
+        clearCachedMessages(props.conversationId)
         try {
           uni.$emit('pc-conversation-cleared', { conversationId: Number(props.conversationId) })
         } catch (e) {}

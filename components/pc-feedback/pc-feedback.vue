@@ -122,6 +122,49 @@
     </view>
   </view>
 
+  <!-- 内置视频播放器：全局单一实例。打开才挂载，关闭先 pause/stop 再卸掉原生层 -->
+  <view
+    v-if="isHost && (state.videoPlayer.show || videoMounted)"
+    class="pc-video-player"
+    @touchmove.stop.prevent
+  >
+    <view class="pc-video-player__bar">
+      <view class="pc-video-player__close pc-press" @tap="onVideoClose">
+        <text class="pc-video-player__close-ico">‹</text>
+      </view>
+      <text class="pc-video-player__title">{{ state.videoPlayer.title || '视频' }}</text>
+      <view class="pc-video-player__bar-spacer" />
+    </view>
+    <view class="pc-video-player__body">
+      <view class="pc-video-player__frame" :style="{ bottom: videoPadBottom + 'px' }">
+        <video
+          v-if="videoMounted && videoSrc"
+          id="pc-builtin-video"
+          class="pc-video-player__video"
+          :src="videoSrc"
+          :controls="true"
+          :autoplay="true"
+          :loop="false"
+          :muted="false"
+          :enable-danmu="false"
+          :danmu-btn="false"
+          :show-center-play-btn="false"
+          :show-play-btn="true"
+          :show-fullscreen-btn="false"
+          :enable-progress-gesture="false"
+          :enable-play-gesture="false"
+          :page-gesture="false"
+          :vslide-gesture="false"
+          :http-cache="false"
+          :play-strategy="0"
+          codec="hardware"
+          object-fit="contain"
+          @error="onVideoError"
+        />
+      </view>
+    </view>
+  </view>
+
   <!-- ActionSheet -->
   <view v-if="isHost && state.sheet.show" class="pc-sheet-mask" @touchmove.stop.prevent @tap="onSheetCancel">
     <view class="pc-sheet" @tap.stop>
@@ -148,7 +191,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, getCurrentInstance, nextTick, ref, watch } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
 import {
   feedbackState,
@@ -161,12 +204,14 @@ import {
   requestPreviewReachEarlier,
   hasPreviewForwardHandler,
   requestPreviewForward,
+  closeVideoPlayer,
   showActionSheet,
   toast,
   showLoading,
   hideLoading
 } from '../../utils/feedback.js'
 import { api } from '../../utils/request.js'
+import { forgetVideoCached } from '../../utils/video-cache.js'
 
 const state = feedbackState
 const hostId = ref(0)
@@ -415,6 +460,128 @@ function onPreviewAnimationFinish(e) {
 function onPreviewClose() {
   if (state.sheet.show) return
   closePreview()
+}
+
+const instance = getCurrentInstance()
+const VIDEO_ID = 'pc-builtin-video'
+const videoMounted = ref(false)
+const videoSrc = ref('')
+/** 抬高原生控制条：作用在包裹层 bottom（video absolute 铺满时父级 padding 无效） */
+const videoPadBottom = ref(24)
+let videoGen = 0
+let localPlayFailed = false
+
+function readSafeBottom() {
+  try {
+    const sys = uni.getSystemInfoSync() || {}
+    let bottom = 0
+    const inset = sys.safeAreaInsets?.bottom
+    if (Number.isFinite(inset) && inset > 0) bottom = inset
+    else if (sys.screenHeight && sys.safeArea && Number.isFinite(sys.safeArea.bottom)) {
+      const gap = sys.screenHeight - sys.safeArea.bottom
+      if (gap > 0) bottom = gap
+    }
+    // 部分 Android 机型 safeArea 为 0，用 screen/window 差值兜底底栏高度
+    if (bottom <= 0 && sys.screenHeight && sys.windowHeight) {
+      const chrome = sys.screenHeight - sys.windowHeight
+      const status = Number(sys.statusBarHeight) || 0
+      if (chrome > status) bottom = chrome - status
+    }
+    return Math.max(0, bottom)
+  } catch (e) {}
+  return 0
+}
+
+function refreshVideoInsets() {
+  const safe = readSafeBottom()
+  // 安全区 + 余量；safe 为 0 时仍留一点，避免控制条贴边被裁切
+  videoPadBottom.value = safe + (safe > 0 ? 12 : 28)
+}
+
+function getVideoCtx() {
+  const proxy = instance && instance.proxy
+  if (proxy) {
+    try {
+      const ctx = uni.createVideoContext(VIDEO_ID, proxy)
+      if (ctx) return ctx
+    } catch (e) {}
+  }
+  try {
+    const ctx = uni.createVideoContext(VIDEO_ID, instance)
+    if (ctx) return ctx
+  } catch (e) {}
+  try {
+    return uni.createVideoContext(VIDEO_ID)
+  } catch (e) {
+    return null
+  }
+}
+
+function stopBuiltinVideo() {
+  try {
+    const ctx = getVideoCtx()
+    if (!ctx) return
+    try { ctx.pause() } catch (e) {}
+    try { if (typeof ctx.stop === 'function') ctx.stop() } catch (e) {}
+  } catch (e) {}
+}
+
+async function destroyVideoInstance() {
+  const gen = ++videoGen
+  stopBuiltinVideo()
+  videoSrc.value = ''
+  await nextTick()
+  await new Promise((r) => setTimeout(r, 120))
+  if (gen !== videoGen) return
+  videoMounted.value = false
+}
+
+watch(
+  () => [state.videoPlayer.show, state.videoPlayer.src, state.videoPlayer.session],
+  async ([show, src]) => {
+    if (show && src) {
+      refreshVideoInsets()
+      localPlayFailed = false
+      const gen = ++videoGen
+      if (videoMounted.value) {
+        stopBuiltinVideo()
+        videoSrc.value = ''
+        videoMounted.value = false
+        await nextTick()
+        await new Promise((r) => setTimeout(r, 120))
+        if (gen !== videoGen) return
+      }
+      if (!state.videoPlayer.show || !state.videoPlayer.src) return
+      videoSrc.value = state.videoPlayer.src
+      videoMounted.value = true
+      return
+    }
+    await destroyVideoInstance()
+  }
+)
+
+function onVideoClose() {
+  stopBuiltinVideo()
+  closeVideoPlayer()
+}
+
+function onVideoError() {
+  const remote = String(state.videoPlayer.sourceUrl || '').trim()
+  const cur = String(videoSrc.value || '').trim()
+  if (state.videoPlayer.show && remote && cur && remote !== cur && !localPlayFailed) {
+    localPlayFailed = true
+    try { forgetVideoCached(remote) } catch (e) {}
+    try { forgetVideoCached(cur) } catch (e) {}
+    videoSrc.value = ''
+    videoMounted.value = false
+    nextTick(() => {
+      if (!state.videoPlayer.show) return
+      videoSrc.value = remote
+      videoMounted.value = true
+    })
+    return
+  }
+  toast({ title: '视频播放失败', icon: 'none' })
 }
 
 function onPreviewLongPress() {
@@ -985,6 +1152,86 @@ async function saveCurrentImage() {
 
 .pc-sheet-cancel:active {
   background: rgba(167, 139, 250, 0.12);
+}
+
+/* 内置视频播放器：inset 贴齐可视区；用 frame 抬底，避免原生控制条移出屏幕 */
+.pc-video-player {
+  position: fixed;
+  left: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: auto;
+  height: auto;
+  z-index: 11700;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-sizing: border-box;
+  background:
+    radial-gradient(ellipse at 50% 18%, rgba(122, 31, 76, 0.32) 0%, transparent 55%),
+    radial-gradient(ellipse at 78% 82%, rgba(124, 58, 237, 0.2) 0%, transparent 45%),
+    rgba(6, 3, 12, 0.98);
+  animation: pc-fade-up 0.2s ease both;
+}
+.pc-video-player__bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8rpx;
+  padding: calc(12rpx + env(safe-area-inset-top)) 16rpx 16rpx;
+  box-sizing: border-box;
+}
+.pc-video-player__close {
+  width: 64rpx;
+  height: 64rpx;
+  border-radius: 16rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(167, 139, 250, 0.12);
+  border: 1px solid rgba(167, 139, 250, 0.22);
+}
+.pc-video-player__close-ico {
+  font-size: 44rpx;
+  line-height: 1;
+  color: #F5EDFF;
+  margin-top: -4rpx;
+}
+.pc-video-player__title {
+  flex: 1;
+  min-width: 0;
+  font-size: 30rpx;
+  font-weight: 600;
+  color: #F5EDFF;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pc-video-player__bar-spacer {
+  width: 64rpx;
+  height: 64rpx;
+}
+.pc-video-player__body {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  position: relative;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+.pc-video-player__frame {
+  position: absolute;
+  left: 0;
+  top: 0;
+  right: 0;
+  /* bottom 由 JS 写入安全区 */
+  overflow: hidden;
+}
+.pc-video-player__video {
+  width: 100%;
+  height: 100%;
+  background: #000;
 }
 
 @keyframes pc-spin {

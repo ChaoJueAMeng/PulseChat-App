@@ -50,6 +50,15 @@ export const feedbackState = reactive({
     hasMoreEarlier: false,
     /** 正在拉取更早历史中的图片 */
     loadingEarlier: false
+  },
+  /** 内置视频播放器：全局只存在一个实例，打开时挂载、关闭时销毁 */
+  videoPlayer: {
+    show: false,
+    src: '',
+    sourceUrl: '',
+    title: '',
+    /** 每次打开/关闭递增，供播放层识别新会话 */
+    session: 0
   }
 })
 
@@ -365,6 +374,39 @@ export function setPreviewCurrent(index) {
   const len = feedbackState.preview.urls.length
   if (!len) return
   feedbackState.preview.current = clampPreviewIndex(index, len)
+}
+
+/**
+ * 打开内置视频播放器。必须传入最终可播放 src，播放过程中不要再换源。
+ * @param {{ src?: string, sourceUrl?: string, title?: string }} options
+ */
+export function openVideoPlayer(options = {}) {
+  const opts = options || {}
+  const src = String(opts.src || opts.sourceUrl || '').trim()
+  const sourceUrl = String(opts.sourceUrl || opts.src || '').trim()
+  if (!src) return
+  feedbackState.videoPlayer.session = (feedbackState.videoPlayer.session || 0) + 1
+  feedbackState.videoPlayer.src = src
+  feedbackState.videoPlayer.sourceUrl = sourceUrl || src
+  feedbackState.videoPlayer.title = String(opts.title || '').trim()
+  feedbackState.videoPlayer.show = true
+}
+
+/** 播放中禁止换 src（叠音/卡顿主因）。仅允许改标题。 */
+export function updateVideoPlayer(options = {}) {
+  if (!feedbackState.videoPlayer.show) return
+  const opts = options || {}
+  if (opts.title != null) {
+    feedbackState.videoPlayer.title = String(opts.title || '')
+  }
+}
+
+export function closeVideoPlayer() {
+  feedbackState.videoPlayer.show = false
+  feedbackState.videoPlayer.src = ''
+  feedbackState.videoPlayer.sourceUrl = ''
+  feedbackState.videoPlayer.title = ''
+  feedbackState.videoPlayer.session = (feedbackState.videoPlayer.session || 0) + 1
 }
 
 /** 劫持原生 uni 提示 API，全应用自动走主题化 UI */
