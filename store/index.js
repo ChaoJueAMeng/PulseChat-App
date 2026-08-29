@@ -1,7 +1,78 @@
 import { reactive } from 'vue'
 import { sortConversations } from '../utils/chat-settings.js'
+import { clearAllMessageCaches } from '../utils/message-cache.js'
+
+const CONV_STORAGE_KEY = 'pc_conversations'
+const CONV_PERSIST_DEBOUNCE_MS = 200
 
 let _store = null
+let persistTimer = null
+let conversationsInflight = null
+
+function persistConversationsSoon(list) {
+  if (persistTimer) clearTimeout(persistTimer)
+  persistTimer = setTimeout(() => {
+    persistTimer = null
+    try {
+      uni.setStorageSync(CONV_STORAGE_KEY, list || [])
+    } catch (e) {}
+  }, CONV_PERSIST_DEBOUNCE_MS)
+}
+
+function clearPersistedConversations() {
+  if (persistTimer) {
+    clearTimeout(persistTimer)
+    persistTimer = null
+  }
+  try {
+    uni.removeStorageSync(CONV_STORAGE_KEY)
+  } catch (e) {}
+}
+
+/** HTTP 刷新时保留 store 里更新的会话摘要，避免在途请求覆盖刚到的 WS */
+function mergeConversations(fromApi, fromStore, watermark) {
+  const storeMap = new Map((fromStore || []).map((c) => [Number(c.id), c]))
+  const wmMap = watermark || {}
+  const merged = (fromApi || []).map((c) => {
+    const id = Number(c.id)
+    const s = storeMap.get(id)
+    let result = c
+    if (s) {
+      const apiMsg = Number(c.lastMsgId) || 0
+      const storeMsg = Number(s.lastMsgId) || 0
+      const apiDraftAt = Number(c.draftUpdatedAt) || 0
+      const storeDraftAt = Number(s.draftUpdatedAt) || 0
+      const apiPinnedAt = Number(c.pinnedAt) || 0
+      const storePinnedAt = Number(s.pinnedAt) || 0
+      if (storeMsg > apiMsg) result = { ...c, ...s }
+      else if (storeMsg === apiMsg && s.lastMsgPreview === '消息已撤回' && c.lastMsgPreview !== '消息已撤回') {
+        result = { ...c, lastMsgPreview: s.lastMsgPreview }
+      }
+      if (storeDraftAt > apiDraftAt) {
+        result = {
+          ...result,
+          draftText: s.draftText,
+          draftAtUserIds: s.draftAtUserIds,
+          draftUpdatedAt: s.draftUpdatedAt
+        }
+      }
+      if (storePinnedAt > apiPinnedAt || (storePinnedAt === 0 && apiPinnedAt > 0 && !Number(s.pinned))) {
+        result = {
+          ...result,
+          pinned: s.pinned,
+          pinnedAt: s.pinnedAt
+        }
+      }
+    }
+    const lastMsgId = Number(result.lastMsgId) || 0
+    const wm = Number(wmMap[id]) || 0
+    if (lastMsgId > 0 && wm >= lastMsgId && (Number(result.unreadCount) || 0) > 0) {
+      result = { ...result, unreadCount: 0 }
+    }
+    return result
+  })
+  return sortConversations(merged)
+}
 
 export function createPiniaLikeStore() {
   const state = reactive({
@@ -25,6 +96,10 @@ export function createPiniaLikeStore() {
         state.token = uni.getStorageSync('pc_token') || ''
         state.refreshToken = uni.getStorageSync('pc_refresh') || ''
         state.user = uni.getStorageSync('pc_user') || null
+        const cached = uni.getStorageSync(CONV_STORAGE_KEY)
+        if (Array.isArray(cached) && cached.length) {
+          state.conversations = sortConversations(cached)
+        }
       } catch (e) {}
     },
     setAuth(payload) {
@@ -53,12 +128,16 @@ export function createPiniaLikeStore() {
       state.conversations = []
       state.activeChatId = null
       state.readWatermark = {}
+      conversationsInflight = null
       uni.removeStorageSync('pc_token')
       uni.removeStorageSync('pc_refresh')
       uni.removeStorageSync('pc_user')
+      clearPersistedConversations()
+      clearAllMessageCaches()
     },
     setConversations(list) {
       state.conversations = sortConversations(list || [])
+      persistConversationsSoon(state.conversations)
     },
     upsertConversation(conv) {
       if (!conv || conv.id == null) return
@@ -71,6 +150,29 @@ export function createPiniaLikeStore() {
       next.unshift(merged)
       // 单次赋值，避免 splice + 再赋值触发两次渲染
       state.conversations = sortConversations(next)
+      persistConversationsSoon(state.conversations)
+    },
+    /**
+     * 共享会话列表请求：并发调用复用同一 Promise，写回走 merge，避免覆盖 WS 更新。
+     * @param {() => Promise<Array>} loader
+     */
+    fetchConversations(loader) {
+      if (conversationsInflight) return conversationsInflight
+      if (typeof loader !== 'function') {
+        return Promise.resolve(state.conversations)
+      }
+      conversationsInflight = Promise.resolve()
+        .then(() => loader())
+        .then((data) => {
+          if (!state.token) return state.conversations
+          const next = mergeConversations(data || [], state.conversations, state.readWatermark)
+          this.setConversations(next)
+          return state.conversations
+        })
+        .finally(() => {
+          conversationsInflight = null
+        })
+      return conversationsInflight
     },
     /** 标记本地已读并清零未读红点，防止 WS/列表刷新把旧未读写回 */
     markConversationReadLocal(conversationId, lastMsgId) {

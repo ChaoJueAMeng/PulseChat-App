@@ -905,65 +905,16 @@ function resetPullVisual() {
   if (!refreshing.value) pullDy.value = 0
 }
 
-/** HTTP 刷新时保留 store 里更新的会话摘要，避免在途请求覆盖刚到的 WS */
-function mergeConversations(fromApi, fromStore) {
-  const storeMap = new Map((fromStore || []).map((c) => [Number(c.id), c]))
-  const watermark = store.state.readWatermark || {}
-  const merged = (fromApi || []).map((c) => {
-    const id = Number(c.id)
-    const s = storeMap.get(id)
-    let result = c
-    if (s) {
-      const apiMsg = Number(c.lastMsgId) || 0
-      const storeMsg = Number(s.lastMsgId) || 0
-      const apiDraftAt = Number(c.draftUpdatedAt) || 0
-      const storeDraftAt = Number(s.draftUpdatedAt) || 0
-      const apiPinnedAt = Number(c.pinnedAt) || 0
-      const storePinnedAt = Number(s.pinnedAt) || 0
-      // store 更新则整份保留（含 unread）；已读后 lastMsgId 相同，会走 API 的 unread=0
-      if (storeMsg > apiMsg) result = { ...c, ...s }
-      // 撤回不改 lastMsgId，仅改 preview：同 id 时保留「消息已撤回」，避免陈旧列表请求盖回原文
-      else if (storeMsg === apiMsg && s.lastMsgPreview === '消息已撤回' && c.lastMsgPreview !== '消息已撤回') {
-        result = { ...c, lastMsgPreview: s.lastMsgPreview }
-      }
-      if (storeDraftAt > apiDraftAt) {
-        result = {
-          ...result,
-          draftText: s.draftText,
-          draftAtUserIds: s.draftAtUserIds,
-          draftUpdatedAt: s.draftUpdatedAt
-        }
-      }
-      if (storePinnedAt > apiPinnedAt || (storePinnedAt === 0 && apiPinnedAt > 0 && !Number(s.pinned))) {
-        result = {
-          ...result,
-          pinned: s.pinned,
-          pinnedAt: s.pinnedAt
-        }
-      }
-    }
-    // 本地已读水位已覆盖最新消息时，即使 API 尚未清零也不显示红点
-    const lastMsgId = Number(result.lastMsgId) || 0
-    const wm = Number(watermark[id]) || 0
-    if (lastMsgId > 0 && wm >= lastMsgId && (Number(result.unreadCount) || 0) > 0) {
-      result = { ...result, unreadCount: 0 }
-    }
-    return result
-  })
-  return sortConversations(merged)
-}
-
 async function load() {
   const gen = ++loadGen
   // 已有列表时勿置 loading，避免切页入场时触发多余重绘
   if (!(store.state.conversations || []).length) loading.value = true
   try {
-    const data = await api.conversations()
+    const data = await store.fetchConversations(() => api.conversations())
     if (gen !== loadGen) return
     ;(data || []).forEach((c) => {
       if (c && c.id != null) syncBackgroundFromDetail(c.id, c)
     })
-    store.setConversations(mergeConversations(data || [], store.state.conversations))
   } catch (e) {
   } finally {
     if (gen !== loadGen) return

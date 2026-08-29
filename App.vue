@@ -67,8 +67,7 @@ async function bootstrapApp() {
     connectWs(store.state.token)
     scheduleRegisterPushClient(800)
     try {
-      const data = await api.conversations()
-      store.setConversations(data || [])
+      await store.fetchConversations(() => api.conversations())
     } catch (e) {}
   }
   try { uni.hideTabBar({ animation: false }) } catch (e) {}
