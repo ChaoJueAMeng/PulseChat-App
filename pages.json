@@ -180,6 +180,39 @@
         "disableScroll": true,
         "app-plus": { "titleNView": false, "bounce": "none" }
       }
+    },
+    {
+      "path": "pages/account/bind-email",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "绑定邮箱",
+        "navigationBarBackgroundColor": "#24123F",
+        "navigationBarTextStyle": "white",
+        "disableScroll": true,
+        "app-plus": { "titleNView": false, "bounce": "none" }
+      }
+    },
+    {
+      "path": "pages/account/phone",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "手机号",
+        "navigationBarBackgroundColor": "#24123F",
+        "navigationBarTextStyle": "white",
+        "disableScroll": true,
+        "app-plus": { "titleNView": false, "bounce": "none" }
+      }
+    },
+    {
+      "path": "pages/account/change-password",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "修改密码",
+        "navigationBarBackgroundColor": "#24123F",
+        "navigationBarTextStyle": "white",
+        "disableScroll": true,
+        "app-plus": { "titleNView": false, "bounce": "none" }
+      }
     }
   ],
   "globalStyle": {

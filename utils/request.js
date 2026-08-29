@@ -1,5 +1,6 @@
 import { BASE_URL } from './config.js'
 import { getStore } from '../store/index.js'
+import { uploadPathCandidates } from './media-msg.js'
 
 /** 仅对网络层 fail 做 Toast 节流：断网期间只弹一次，网络恢复(任意请求成功)后重置 */
 let networkToastShown = false
@@ -175,7 +176,9 @@ export function request({ url, method = 'GET', data, auth = true, header = {}, s
 
 export const api = {
   login: (data) => request({ url: '/api/auth/login', method: 'POST', data, auth: false }),
+  loginByEmailCode: (data) => request({ url: '/api/auth/login/email-code', method: 'POST', data, auth: false }),
   register: (data) => request({ url: '/api/auth/register', method: 'POST', data, auth: false }),
+  sendEmailCode: (data) => request({ url: '/api/auth/email/send-code', method: 'POST', data, auth: false }),
   refresh: (refreshToken) => request({
     url: '/api/auth/refresh',
     method: 'POST',
@@ -185,6 +188,11 @@ export const api = {
   }),
   me: () => request({ url: '/api/users/me' }),
   updateMe: (data) => request({ url: '/api/users/me', method: 'PUT', data }),
+  sendBindEmailCode: (data) => request({ url: '/api/users/me/email/send-code', method: 'POST', data }),
+  bindEmail: (data) => request({ url: '/api/users/me/email/bind', method: 'POST', data }),
+  updatePhone: (data) => request({ url: '/api/users/me/phone', method: 'PUT', data }),
+  sendPasswordCode: () => request({ url: '/api/users/me/password/send-code', method: 'POST' }),
+  updatePassword: (data) => request({ url: '/api/users/me/password', method: 'PUT', data }),
   searchUsers: (keyword) => request({ url: '/api/users/search?keyword=' + encodeURIComponent(keyword) }),
   friends: () => request({ url: '/api/friends' }),
   pendingFriends: () => request({ url: '/api/friends/pending' }),
@@ -289,44 +297,78 @@ export const api = {
   upload: (filePath, options = {}) => new Promise((resolve, reject) => {
     const store = getStore()
     const category = options.category ? '?category=' + encodeURIComponent(options.category) : ''
-    const doUpload = () => {
-      uni.uploadFile({
-        url: BASE_URL + '/api/files/upload' + category,
-        filePath,
-        name: 'file',
-        header: { Authorization: 'Bearer ' + store.state.token },
-        success: (res) => {
-          applySlideRenewHeaders(res.header)
-          try {
-            const body = JSON.parse(res.data)
-            if (body.code === 0) {
-              resolve(body.data)
-              return
-            }
-            if (body.code === 401 || res.statusCode === 401) {
-              if (!options._retriedAfterRefresh && store.state.refreshToken) {
-                refreshAuthTokens()
-                  .then(() => api.upload(filePath, { ...options, _retriedAfterRefresh: true }))
-                  .then(resolve)
-                  .catch(() => {
-                    forceReLogin(body.message || '请重新登录', false)
-                    reject(new Error(body.message || '未登录'))
-                  })
+    const candidates = uploadPathCandidates(filePath)
+    if (!candidates.length) {
+      reject(new Error('文件路径无效，请重新选择'))
+      return
+    }
+
+    const tryStat = (idx) => {
+      if (idx >= candidates.length) {
+        reject(new Error('文件无法读取，请重新选择'))
+        return
+      }
+      const path = candidates[idx]
+      uni.getFileInfo({
+        filePath: path,
+        success: (info) => {
+          const size = Number(info?.size)
+          if (!(size > 0)) {
+            tryStat(idx + 1)
+            return
+          }
+          uni.uploadFile({
+            url: BASE_URL + '/api/files/upload' + category,
+            filePath: path,
+            name: 'file',
+            header: {
+              Authorization: 'Bearer ' + store.state.token,
+              Accept: 'application/json'
+            },
+            success: (res) => {
+              applySlideRenewHeaders(res.header)
+              try {
+                const body = typeof res.data === 'string' ? JSON.parse(res.data) : res.data
+                if (body && body.code === 0) {
+                  resolve(body.data)
+                  return
+                }
+                if ((body && body.code === 401) || res.statusCode === 401) {
+                  if (!options._retriedAfterRefresh && store.state.refreshToken) {
+                    refreshAuthTokens()
+                      .then(() => api.upload(path, { ...options, _retriedAfterRefresh: true }))
+                      .then(resolve)
+                      .catch(() => {
+                        forceReLogin((body && body.message) || '请重新登录', false)
+                        reject(new Error((body && body.message) || '未登录'))
+                      })
+                    return
+                  }
+                  forceReLogin((body && body.message) || '请重新登录', false)
+                  reject(new Error((body && body.message) || '未登录'))
+                  return
+                }
+                const tip = (body && body.message) || '上传失败'
+                uni.showToast({ title: String(tip).slice(0, 40), icon: 'none' })
+                reject(new Error(tip))
+              } catch (e) {
+                reject(e instanceof Error ? e : new Error('上传响应解析失败'))
+              }
+            },
+            fail: (err) => {
+              const msg = err?.errMsg || err?.message || ''
+              // 当前路径原生层读失败时尝试下一候选
+              if (idx + 1 < candidates.length) {
+                tryStat(idx + 1)
                 return
               }
-              forceReLogin(body.message || '请重新登录', false)
-              reject(new Error(body.message || '未登录'))
-              return
+              reject(new Error(msg || '上传失败，请检查网络后重试'))
             }
-            uni.showToast({ title: body.message || '上传失败', icon: 'none' })
-            reject(new Error(body.message || '上传失败'))
-          } catch (e) {
-            reject(e)
-          }
+          })
         },
-        fail: reject
+        fail: () => tryStat(idx + 1)
       })
     }
-    doUpload()
+    tryStat(0)
   })
 }

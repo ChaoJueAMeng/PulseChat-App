@@ -6,24 +6,57 @@
     </view>
 
     <view class="panel pc-card pc-enter" style="animation-delay: 0.1s">
-      <view class="field">
-        <text class="label">手机号</text>
-        <input class="input" type="number" maxlength="11" v-model="phone" placeholder="请输入11位手机号" placeholder-class="ph" />
-      </view>
-      <view class="field">
-        <text class="label">密码</text>
-        <view class="input-row">
-          <input
-            class="input flex"
-            :password="!showPassword"
-            maxlength="32"
-            v-model="password"
-            placeholder="6-32位密码"
-            placeholder-class="ph"
-          />
-          <text class="eye" @tap="showPassword = !showPassword">{{ showPassword ? '隐藏' : '显示' }}</text>
+      <view class="mode-tabs">
+        <view class="mode-btn" :class="{ on: mode === 'password' }" @tap="mode = 'password'">
+          <text class="mode-btn-text">密码登录</text>
+        </view>
+        <view class="mode-btn" :class="{ on: mode === 'code' }" @tap="mode = 'code'">
+          <text class="mode-btn-text">验证码登录</text>
         </view>
       </view>
+
+      <template v-if="mode === 'password'">
+        <view class="field">
+          <text class="label">账号</text>
+          <input
+            class="input"
+            v-model="account"
+            placeholder="请输入手机号或邮箱"
+            placeholder-class="ph"
+          />
+        </view>
+        <view class="field">
+          <text class="label">密码</text>
+          <view class="input-row">
+            <input
+              class="input flex"
+              :password="!showPassword"
+              maxlength="32"
+              v-model="password"
+              placeholder="6-32位密码"
+              placeholder-class="ph"
+            />
+            <text class="eye" @tap="showPassword = !showPassword">{{ showPassword ? '隐藏' : '显示' }}</text>
+          </view>
+        </view>
+      </template>
+
+      <template v-else>
+        <view class="field">
+          <text class="label">邮箱</text>
+          <input class="input" v-model="email" placeholder="请输入邮箱" placeholder-class="ph" />
+        </view>
+        <view class="field">
+          <text class="label">验证码</text>
+          <view class="input-row">
+            <input class="input flex" type="number" maxlength="6" v-model="code" placeholder="6位验证码" placeholder-class="ph" />
+            <text class="code-btn" :class="{ disabled: codeSeconds > 0 || sending }" @tap="sendLoginCode">
+              {{ codeSeconds > 0 ? codeSeconds + 's' : (sending ? '发送中' : '获取验证码') }}
+            </text>
+          </view>
+        </view>
+      </template>
+
       <button class="pc-btn enter" :loading="loading" @tap="submit">登录</button>
       <view class="switch-row">
         <text class="switch-text">还没有账号？</text>
@@ -35,24 +68,127 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, onUnmounted } from 'vue'
 import { api } from '../../utils/request.js'
 import { getStore } from '../../store/index.js'
 import { connectWs } from '../../utils/ws.js'
 import { scheduleRegisterPushClient } from '../../utils/notify.js'
 
-const phone = ref('')
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+const PHONE_RE = /^1\d{10}$/
+
+const mode = ref('password')
+const account = ref('')
+const email = ref('')
 const password = ref('')
+const code = ref('')
 const showPassword = ref(false)
 const loading = ref(false)
+const sending = ref(false)
+const codeSeconds = ref(0)
+let codeTimer = null
 
 function goRegister() {
   uni.navigateTo({ url: '/pages/register/register' })
 }
 
+function startCountdown() {
+  clearCountdown()
+  codeSeconds.value = 60
+  codeTimer = setInterval(() => {
+    codeSeconds.value -= 1
+    if (codeSeconds.value <= 0) clearCountdown()
+  }, 1000)
+}
+
+function clearCountdown() {
+  if (codeTimer) {
+    clearInterval(codeTimer)
+    codeTimer = null
+  }
+  if (codeSeconds.value < 0) codeSeconds.value = 0
+}
+
+onUnmounted(clearCountdown)
+
+/** 一般做法：含 @ 按邮箱；纯 11 位手机号按手机；否则报错 */
+function resolveAccount(raw) {
+  const value = (raw || '').trim()
+  if (!value) {
+    return { error: '请输入手机号或邮箱' }
+  }
+  if (value.includes('@')) {
+    if (!EMAIL_RE.test(value)) {
+      return { error: '邮箱格式不对' }
+    }
+    return { email: value }
+  }
+  if (/^\d+$/.test(value)) {
+    if (!PHONE_RE.test(value)) {
+      return { error: '手机号格式不对' }
+    }
+    return { phone: value }
+  }
+  return { error: '请输入正确的手机号或邮箱' }
+}
+
+async function afterAuth(data, toast) {
+  const store = getStore()
+  store.setAuth(data)
+  connectWs(data.accessToken)
+  scheduleRegisterPushClient(500)
+  try {
+    store.setConversations(await api.conversations() || [])
+  } catch (e) {}
+  uni.vibrateShort && uni.vibrateShort()
+  uni.showToast({ title: toast, icon: 'none' })
+  setTimeout(() => uni.switchTab({ url: '/pages/chats/chats' }), 400)
+}
+
+async function sendLoginCode() {
+  if (codeSeconds.value > 0 || sending.value) return
+  if (!EMAIL_RE.test((email.value || '').trim())) {
+    uni.showToast({ title: '邮箱格式不对', icon: 'none' })
+    return
+  }
+  sending.value = true
+  try {
+    await api.sendEmailCode({ email: email.value.trim(), purpose: 'login' })
+    uni.showToast({ title: '验证码已发送', icon: 'none' })
+    startCountdown()
+  } catch (e) {
+  } finally {
+    sending.value = false
+  }
+}
+
 async function submit() {
-  if (!/^1\d{10}$/.test(phone.value)) {
-    uni.showToast({ title: '手机号格式不对', icon: 'none' })
+  if (mode.value === 'code') {
+    if (!EMAIL_RE.test((email.value || '').trim())) {
+      uni.showToast({ title: '邮箱格式不对', icon: 'none' })
+      return
+    }
+    if (!/^\d{6}$/.test(code.value || '')) {
+      uni.showToast({ title: '请输入6位验证码', icon: 'none' })
+      return
+    }
+    loading.value = true
+    try {
+      const data = await api.loginByEmailCode({
+        email: email.value.trim(),
+        code: code.value
+      })
+      await afterAuth(data, '登录成功')
+    } catch (e) {
+    } finally {
+      loading.value = false
+    }
+    return
+  }
+
+  const resolved = resolveAccount(account.value)
+  if (resolved.error) {
+    uni.showToast({ title: resolved.error, icon: 'none' })
     return
   }
   if (!password.value) {
@@ -65,20 +201,11 @@ async function submit() {
   }
   loading.value = true
   try {
-    const data = await api.login({
-      phone: phone.value,
-      password: password.value
-    })
-    const store = getStore()
-    store.setAuth(data)
-    connectWs(data.accessToken)
-    scheduleRegisterPushClient(500)
-    try {
-      store.setConversations(await api.conversations() || [])
-    } catch (e) {}
-    uni.vibrateShort && uni.vibrateShort()
-    uni.showToast({ title: '登录成功', icon: 'none' })
-    setTimeout(() => uni.switchTab({ url: '/pages/chats/chats' }), 400)
+    const payload = { password: password.value }
+    if (resolved.phone) payload.phone = resolved.phone
+    else payload.email = resolved.email
+    const data = await api.login(payload)
+    await afterAuth(data, '登录成功')
   } catch (e) {
   } finally {
     loading.value = false
@@ -101,6 +228,33 @@ async function submit() {
   border-radius: $pc-radius-xl; padding: 44rpx 36rpx;
   animation: pc-soft-glow 4s ease-in-out infinite;
 }
+.mode-tabs {
+  display: flex; gap: 16rpx; margin-bottom: 32rpx;
+}
+.mode-btn {
+  flex: 1;
+  height: 72rpx;
+  border-radius: $pc-radius-pill;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(167, 139, 250, 0.18);
+  transition: all 0.2s ease;
+  &.on {
+    background: rgba(167, 139, 250, 0.22);
+    border-color: rgba(167, 139, 250, 0.55);
+    box-shadow: 0 0 24rpx rgba(167, 139, 250, 0.18);
+  }
+}
+.mode-btn-text {
+  font-size: 26rpx;
+  color: #6B5C7A;
+  font-weight: 600;
+}
+.mode-btn.on .mode-btn-text {
+  color: $pc-purple;
+}
 .field { margin-bottom: 28rpx; }
 .label { display: block; color: $pc-muted; font-size: 24rpx; margin-bottom: 12rpx; }
 .input-row {
@@ -113,9 +267,10 @@ async function submit() {
   transition: border-color 0.2s ease;
 }
 .input.flex { flex: 1; min-width: 0; }
-.eye {
+.eye, .code-btn {
   flex-shrink: 0; padding: 0 12rpx; color: $pc-purple; font-size: 24rpx;
 }
+.code-btn.disabled { color: #6B5C7A; }
 .ph { color: #6B5C7A; }
 .enter {
   margin-top: 16rpx; height: 96rpx; line-height: 96rpx;

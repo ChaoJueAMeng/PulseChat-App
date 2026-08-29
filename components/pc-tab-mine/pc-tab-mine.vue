@@ -32,12 +32,22 @@
         <view class="info">
           <text class="name">{{ user?.nickname || '用户' }}</text>
           <text v-if="user?.account" class="acc">账号 {{ user.account }}</text>
+          <text v-if="user?.email" class="phone">{{ user.email }}</text>
           <text v-if="user?.phone" class="phone">{{ user.phone }}</text>
         </view>
       </view>
 
       <view class="menu pc-card pc-enter" style="animation-delay: 0.08s">
         <view class="item pc-press" @tap="goEdit">编辑资料</view>
+        <view class="item pc-press" @tap="goBindEmail">
+          <text>绑定邮箱</text>
+          <text v-if="user?.email" class="item-extra">{{ user.email }}</text>
+        </view>
+        <view class="item pc-press" @tap="goPhone">
+          <text>{{ user?.phone ? '修改手机号' : '添加手机号' }}</text>
+          <text v-if="user?.phone" class="item-extra">{{ user.phone }}</text>
+        </view>
+        <view class="item pc-press" @tap="goPassword">修改密码</view>
         <view class="item pc-press" @tap="goStickers">表情包管理</view>
         <view class="item pc-press" @tap="openAi">与 Kimi 私聊</view>
         <view class="item pc-press" @tap="copyAccount">复制账号</view>
@@ -109,6 +119,21 @@ async function load() {
 }
 
 function goEdit() { uni.navigateTo({ url: '/pages/profile-edit/profile-edit' }) }
+function goBindEmail() {
+  if (user.value?.email) {
+    uni.showToast({ title: '邮箱绑定后不可更改', icon: 'none' })
+    return
+  }
+  uni.navigateTo({ url: '/pages/account/bind-email' })
+}
+function goPhone() { uni.navigateTo({ url: '/pages/account/phone' }) }
+function goPassword() {
+  if (!user.value?.email) {
+    uni.showToast({ title: '请先绑定邮箱', icon: 'none' })
+    return
+  }
+  uni.navigateTo({ url: '/pages/account/change-password' })
+}
 function goStickers() { uni.navigateTo({ url: '/pages/sticker-manage/sticker-manage' }) }
 async function changeAvatar() {
   try {
@@ -169,11 +194,13 @@ watch(() => props.active, (v) => {
 .acc, .phone { display: block; margin-top: 8rpx; color: $pc-muted; font-size: 22rpx; }
 .menu { border-radius: $pc-radius-xl; overflow: hidden; margin-bottom: 24rpx; }
 .item {
+  display: flex; align-items: center; justify-content: space-between; gap: 16rpx;
   padding: 30rpx 28rpx; color: $pc-text; font-size: 28rpx;
   border-bottom: 1px solid rgba(167, 139, 250, 0.1);
   &:last-child { border-bottom: none; }
   &.danger { color: $pc-rose; }
 }
+.item-extra { color: $pc-muted; font-size: 22rpx; flex-shrink: 0; }
 .switch-row {
   display: flex;
   align-items: center;

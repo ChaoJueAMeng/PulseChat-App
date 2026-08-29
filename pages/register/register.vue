@@ -7,8 +7,17 @@
 
     <view class="panel pc-card pc-enter" style="animation-delay: 0.1s">
       <view class="field">
-        <text class="label">手机号</text>
-        <input class="input" type="number" maxlength="11" v-model="phone" placeholder="请输入11位手机号" placeholder-class="ph" />
+        <text class="label">邮箱</text>
+        <input class="input" v-model="email" placeholder="请输入邮箱" placeholder-class="ph" />
+      </view>
+      <view class="field">
+        <text class="label">验证码</text>
+        <view class="input-row">
+          <input class="input flex" type="number" maxlength="6" v-model="code" placeholder="6位验证码" placeholder-class="ph" />
+          <text class="code-btn" :class="{ disabled: codeSeconds > 0 || sending }" @tap="sendRegisterCode">
+            {{ codeSeconds > 0 ? codeSeconds + 's' : (sending ? '发送中' : '获取验证码') }}
+          </text>
+        </view>
       </view>
       <view class="field">
         <text class="label">昵称（可选）</text>
@@ -53,19 +62,25 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, onUnmounted } from 'vue'
 import { api } from '../../utils/request.js'
 import { getStore } from '../../store/index.js'
 import { connectWs } from '../../utils/ws.js'
 import { scheduleRegisterPushClient } from '../../utils/notify.js'
 
-const phone = ref('')
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+const email = ref('')
+const code = ref('')
 const nickname = ref('')
 const password = ref('')
 const confirmPassword = ref('')
 const showPassword = ref(false)
 const showConfirm = ref(false)
 const loading = ref(false)
+const sending = ref(false)
+const codeSeconds = ref(0)
+let codeTimer = null
 
 function goLogin() {
   uni.navigateBack({
@@ -73,13 +88,53 @@ function goLogin() {
   })
 }
 
+function startCountdown() {
+  if (codeTimer) {
+    clearInterval(codeTimer)
+    codeTimer = null
+  }
+  codeSeconds.value = 60
+  codeTimer = setInterval(() => {
+    codeSeconds.value -= 1
+    if (codeSeconds.value <= 0) {
+      clearInterval(codeTimer)
+      codeTimer = null
+    }
+  }, 1000)
+}
+
+onUnmounted(() => {
+  if (codeTimer) clearInterval(codeTimer)
+})
+
+async function sendRegisterCode() {
+  if (codeSeconds.value > 0 || sending.value) return
+  if (!EMAIL_RE.test((email.value || '').trim())) {
+    uni.showToast({ title: '邮箱格式不对', icon: 'none' })
+    return
+  }
+  sending.value = true
+  try {
+    await api.sendEmailCode({ email: email.value.trim(), purpose: 'register' })
+    uni.showToast({ title: '验证码已发送', icon: 'none' })
+    startCountdown()
+  } catch (e) {
+  } finally {
+    sending.value = false
+  }
+}
+
 async function submit() {
-  if (!/^1\d{10}$/.test(phone.value)) {
-    uni.showToast({ title: '手机号格式不对', icon: 'none' })
+  if (!EMAIL_RE.test((email.value || '').trim())) {
+    uni.showToast({ title: '邮箱格式不对', icon: 'none' })
+    return
+  }
+  if (!/^\d{6}$/.test(code.value || '')) {
+    uni.showToast({ title: '请输入6位验证码', icon: 'none' })
     return
   }
   if (!password.value) {
-    uni.showToast({ title: '请输入密码', icon: 'none' })
+    uni.showToast({ title: '请设置密码', icon: 'none' })
     return
   }
   if (password.value.length < 6 || password.value.length > 32) {
@@ -93,7 +148,8 @@ async function submit() {
   loading.value = true
   try {
     const data = await api.register({
-      phone: phone.value,
+      email: email.value.trim(),
+      code: code.value,
       nickname: nickname.value || undefined,
       password: password.value
     })
@@ -115,8 +171,8 @@ async function submit() {
 </script>
 
 <style scoped lang="scss">
-.register { min-height: 100vh; padding: 140rpx 44rpx 60rpx; }
-.hero { margin-bottom: 72rpx; }
+.register { min-height: 100vh; padding: 100rpx 44rpx 60rpx; }
+.hero { margin-bottom: 48rpx; }
 .logo {
   font-size: 68rpx; font-weight: 800; letter-spacing: 2rpx;
   background: linear-gradient(100deg, $pc-purple, $pc-magenta 45%, $pc-red);
@@ -129,7 +185,7 @@ async function submit() {
   border-radius: $pc-radius-xl; padding: 44rpx 36rpx;
   animation: pc-soft-glow 4s ease-in-out infinite;
 }
-.field { margin-bottom: 28rpx; }
+.field { margin-bottom: 24rpx; }
 .label { display: block; color: $pc-muted; font-size: 24rpx; margin-bottom: 12rpx; }
 .input-row {
   display: flex; align-items: center; gap: 12rpx;
@@ -141,9 +197,10 @@ async function submit() {
   transition: border-color 0.2s ease;
 }
 .input.flex { flex: 1; min-width: 0; }
-.eye {
+.eye, .code-btn {
   flex-shrink: 0; padding: 0 12rpx; color: $pc-purple; font-size: 24rpx;
 }
+.code-btn.disabled { color: #6B5C7A; }
 .ph { color: #6B5C7A; }
 .enter {
   margin-top: 16rpx; height: 96rpx; line-height: 96rpx;
