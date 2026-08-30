@@ -5,6 +5,7 @@ import { connectWs, ensureWs, pauseWsForBackground, notifyAppForeground } from '
 import { installFeedback } from './utils/feedback.js'
 import { installNotifyListener, onAppShowNotify, scheduleRegisterPushClient, setAppVisible } from './utils/notify.js'
 import { api } from './utils/request.js'
+import { installErrorReporting, reportCaught } from './utils/error-report.js'
 
 /** 与后端 pulsechat.push.foreground-debounce-ms 对齐：away 后短时不标前台，避免漏推 */
 const PRESENCE_ACTIVE_DEBOUNCE_MS = 2500
@@ -20,7 +21,9 @@ function isPrivacyAgreed() {
     if (typeof plus !== 'undefined' && plus.runtime && typeof plus.runtime.isAgreePrivacy === 'function') {
       return !!plus.runtime.isAgreePrivacy()
     }
-  } catch (e) {}
+  } catch (e) {
+    reportCaught('app.isPrivacyAgreed', e, { level: 'debug' })
+  }
   // #endif
   return true
 }
@@ -58,6 +61,7 @@ function markPresenceActiveSoon() {
 
 async function bootstrapApp() {
   if (!isPrivacyAgreed()) return
+  installErrorReporting()
   installFeedback()
   installNotifyListener()
   setAppVisible(true)
@@ -68,9 +72,15 @@ async function bootstrapApp() {
     scheduleRegisterPushClient(800)
     try {
       await store.fetchConversations(() => api.conversations())
-    } catch (e) {}
+    } catch (e) {
+      reportCaught('app.bootstrap.fetchConversations', e)
+    }
   }
-  try { uni.hideTabBar({ animation: false }) } catch (e) {}
+  try {
+    uni.hideTabBar({ animation: false })
+  } catch (e) {
+    reportCaught('app.bootstrap.hideTabBar', e, { level: 'debug' })
+  }
 }
 
 /** App 端关闭 WebView 边缘回弹，避免非必要区域下拉整页拉伸 */
@@ -85,7 +95,9 @@ function disableCurrentWebviewBounce() {
     if (wv && typeof wv.setStyle === 'function') {
       wv.setStyle({ bounce: 'none' })
     }
-  } catch (e) {}
+  } catch (e) {
+    reportCaught('app.disableCurrentWebviewBounce', e, { level: 'debug' })
+  }
   // #endif
 }
 
@@ -104,7 +116,9 @@ function installBounceGuard() {
         success: scheduleDisableBounce,
         complete: scheduleDisableBounce
       })
-    } catch (e) {}
+    } catch (e) {
+      reportCaught('app.installBounceGuard.' + method, e, { level: 'debug' })
+    }
   })
   // #endif
 }

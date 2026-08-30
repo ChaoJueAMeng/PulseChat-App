@@ -1,5 +1,6 @@
 import { WS_URL } from './config.js'
 import { getStore } from '../store/index.js'
+import { reportCaught } from './error-report.js'
 
 let socketTask = null
 let heartbeatTimer = null
@@ -29,7 +30,11 @@ export function onWs(event, handler) {
 
 function emit(event, payload) {
   ;(listeners[event] || []).forEach(h => {
-    try { h(payload) } catch (e) {}
+    try {
+      h(payload)
+    } catch (e) {
+      reportCaught('ws.emit.' + event, e)
+    }
   })
 }
 
@@ -103,7 +108,11 @@ function closeSocketSoft() {
   if (!task) return
   closingIntentionally = true
   socketTask = null
-  try { task.close() } catch (e) {}
+  try {
+    task.close()
+  } catch (e) {
+    reportCaught('ws.closeSocketSoft', e, { level: 'debug' })
+  }
 }
 
 export function connectWs(token) {
@@ -211,7 +220,11 @@ export function connectWs(token) {
     if (socketTask === task) {
       closingIntentionally = false
       connecting = false
-      try { task.close() } catch (e) {}
+      try {
+        task.close()
+      } catch (e) {
+        reportCaught('ws.onError.close', e, { level: 'debug' })
+      }
       socketTask = null
       stopHeartbeat()
       if (getStore().state.token) scheduleReconnect()
@@ -238,18 +251,24 @@ export function pauseWsForBackground() {
   stopHeartbeat()
   try {
     sendStomp('/app/chat.background', {})
-  } catch (e) {}
+  } catch (e) {
+    reportCaught('ws.pauseWsForBackground.send', e)
+  }
   connecting = false
   closeSocketSoft()
   try {
     getStore().setConnected(false)
-  } catch (e) {}
+  } catch (e) {
+    reportCaught('ws.pauseWsForBackground.setConnected', e)
+  }
 }
 
 export function notifyAppForeground() {
   try {
     sendStomp('/app/chat.foreground', {})
-  } catch (e) {}
+  } catch (e) {
+    reportCaught('ws.notifyAppForeground.send', e)
+  }
 }
 
 export function subscribe(destination) {
@@ -290,7 +309,11 @@ export function subscribeConversation(conversationId) {
   ]
   return () => {
     offs.forEach((off) => {
-      try { off && off() } catch (e) {}
+      try {
+        off && off()
+      } catch (e) {
+        reportCaught('ws.bindCoreNotify.off', e, { level: 'debug' })
+      }
     })
   }
 }

@@ -1,4 +1,5 @@
 import { fullUrl } from './url.js'
+import { reportCaught } from './error-report.js'
 
 
 const CACHE_KEY = 'pc_img_cache_v1'
@@ -25,7 +26,9 @@ function readMap() {
 function writeMap(map) {
   try {
     uni.setStorageSync(CACHE_KEY, map || {})
-  } catch (e) {}
+  } catch (e) {
+    reportCaught('image-cache.write', e)
+  }
 }
 
 function getDiskMap() {
@@ -109,7 +112,9 @@ function fileExists(filePath) {
         )
         return
       }
-    } catch (e) {}
+    } catch (e) {
+    reportCaught('image-cache.catch', e)
+  }
     uni.getFileInfo({
       filePath,
       success: () => resolve(true),
@@ -188,7 +193,9 @@ export async function ensureCached(path) {
         return remote
       }
     }
-  } catch (e) {}
+  } catch (e) {
+    reportCaught('image-cache.catch', e)
+  }
 
   const mem = memory.get(remote)
   if (mem && await fileExists(mem)) return mem

@@ -1,3 +1,5 @@
+import { reportCaught } from './error-report.js'
+
 /** 视频消息类型，与后端 ChatConstants.MSG_VIDEO 一致 */
 export const MSG_VIDEO = 7
 /** 文件消息类型（历史兼容，已不再允许新发送），与后端 ChatConstants.MSG_FILE 一致 */
@@ -63,7 +65,9 @@ export function toUploadablePath(path) {
         if (abs) s = String(abs)
       }
     }
-  } catch (e) {}
+  } catch (e) {
+    reportCaught('media-msg.catch', e, { level: 'debug' })
+  }
   if (s.startsWith('file://')) s = s.slice(7)
   // Android 偶发 file:///path（三斜杠）
   if (s.startsWith('file:/') && !s.startsWith('file://')) {
@@ -101,7 +105,9 @@ export function uploadPathCandidates(filePath) {
         push(plus.io.convertLocalFileSystemURL(raw))
       }
     }
-  } catch (e) {}
+  } catch (e) {
+    reportCaught('media-msg.catch', e, { level: 'debug' })
+  }
   return list
 }
 

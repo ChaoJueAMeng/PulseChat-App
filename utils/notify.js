@@ -2,6 +2,7 @@ import { getStore } from '../store/index.js'
 import { sortConversations } from './chat-settings.js'
 import { api } from './request.js'
 import { requestMainTab } from './tab-swipe.js'
+import { reportCaught } from './error-report.js'
 
 /**
  * UniPush 2.0：真机启用；模拟器（尤其 MuMu）个推会疯狂重试拖垮进程，自动跳过。
@@ -30,7 +31,9 @@ function isUniPushEnabled() {
     if (plus.runtime && typeof plus.runtime.isAgreePrivacy === 'function' && !plus.runtime.isAgreePrivacy()) {
       return false
     }
-  } catch (e) {}
+  } catch (e) {
+    reportCaught('notify.isUniPushEnabled', e, { level: 'debug' })
+  }
   return !isLikelyEmulator()
 }
 
@@ -66,7 +69,9 @@ function readFlag(key, defaultValue = true) {
 function writeFlag(key, value) {
   try {
     uni.setStorageSync(key, !!value)
-  } catch (e) {}
+  } catch (e) {
+    reportCaught('notify.readFlag', e, { level: 'debug' })
+  }
 }
 
 export function getNotifyPrefs() {
@@ -190,7 +195,9 @@ function areAndroidNotificationsEnabled() {
     if (typeof nm.areNotificationsEnabled === 'function') {
       return !!nm.areNotificationsEnabled()
     }
-  } catch (e) {}
+  } catch (e) {
+    reportCaught('notify.areAndroidNotificationsEnabled', e, { level: 'debug' })
+  }
   return true
 }
 
@@ -273,7 +280,9 @@ function createPlusPushMessage(title, content, payload) {
       })
       return true
     }
-  } catch (e) {}
+  } catch (e) {
+    reportCaught('notify.createPlusPushMessage', e, { level: 'debug' })
+  }
   if (typeof plus === 'undefined' || !plus.push || typeof plus.push.createMessage !== 'function') {
     return false
   }
@@ -320,7 +329,9 @@ function consumePendingNotifyPayload() {
     if (!raw) return
     intent.removeExtra('pc_notify_payload')
     handleNotifyPayload(raw)
-  } catch (e) {}
+  } catch (e) {
+    reportCaught('notify.consumePendingNotifyPayload', e, { level: 'debug' })
+  }
 }
 
 function normalizePushPayload(raw) {
@@ -413,20 +424,26 @@ function installPushHandlers() {
         }
       })
     }
-  } catch (e) {}
+  } catch (e) {
+    reportCaught('notify.installPushListeners.onPushMessage', e, { level: 'debug' })
+  }
 
   try {
     if (plus.push && typeof plus.push.setAutoNotification === 'function') {
       plus.push.setAutoNotification(true)
     }
-  } catch (e) {}
+  } catch (e) {
+    reportCaught('notify.installPushListeners.setAutoNotification', e, { level: 'debug' })
+  }
   try {
     if (plus.push) {
       plus.push.addEventListener('click', (msg) => {
         handleNotifyPayload(msg?.payload)
       }, false)
     }
-  } catch (e) {}
+  } catch (e) {
+    reportCaught('notify.installPushListeners.click', e, { level: 'debug' })
+  }
   // 云端透传推送：未自动展示时转为系统通知（本地消息带 _pcLocal，直接忽略）
   try {
     if (plus.push) {
@@ -434,7 +451,9 @@ function installPushHandlers() {
         showIncomingPush(msg)
       }, false)
     }
-  } catch (e) {}
+  } catch (e) {
+    reportCaught('notify.installPushListeners.receive', e, { level: 'debug' })
+  }
 }
 
 function requestNotifyPermission() {
@@ -454,16 +473,22 @@ function requestNotifyPermission() {
       if (!areAndroidNotificationsEnabled()) {
         try {
           console.warn('[notify] Android 通知权限未开启，系统通知栏将无法展示')
-        } catch (e) {}
+        } catch (e) {
+          reportCaught('notify.requestNotifyPermission.warn', e, { level: 'debug' })
+        }
       }
       return
     }
-  } catch (e) {}
+  } catch (e) {
+    reportCaught('notify.requestNotifyPermission.android', e, { level: 'debug' })
+  }
   // iOS：触发系统通知授权弹窗（同时可拿到 CID）
   if (!isUniPushEnabled()) return
   try {
     resolvePushClientId().catch(() => {})
-  } catch (e) {}
+  } catch (e) {
+    reportCaught('notify.requestNotifyPermission.ios', e, { level: 'debug' })
+  }
 }
 
 function detectPlatform() {
@@ -475,7 +500,9 @@ function detectPlatform() {
       if (name.includes('harmony')) return 'harmony'
       return name
     }
-  } catch (e) {}
+  } catch (e) {
+    reportCaught('notify.detectPlatform', e, { level: 'debug' })
+  }
   return undefined
 }
 
@@ -483,7 +510,9 @@ function cacheClientId(cid) {
   if (!cid) return
   try {
     uni.setStorageSync(CID_KEY, String(cid))
-  } catch (e) {}
+  } catch (e) {
+    reportCaught('notify.cacheClientId', e, { level: 'debug' })
+  }
 }
 
 function readCachedClientId() {
@@ -512,7 +541,9 @@ function tryResolvePushClientIdOnce() {
         })
         return
       }
-    } catch (e) {}
+    } catch (e) {
+    reportCaught('notify.finish', e, { level: 'debug' })
+  }
     tryPlusClientId(finish)
   })
 }
@@ -548,7 +579,9 @@ function tryPlusClientId(finish) {
       finish(info?.clientid || info?.clientId || '')
       return
     }
-  } catch (e) {}
+  } catch (e) {
+    reportCaught('notify.tryPlusClientId', e, { level: 'debug' })
+  }
   finish('')
 }
 
@@ -600,10 +633,14 @@ export async function unregisterPushClient() {
   const cid = readCachedClientId()
   try {
     await api.unregisterPushToken(cid ? { clientId: cid } : {})
-  } catch (e) {}
+  } catch (e) {
+    reportCaught('notify.unregisterPushClient', e)
+  }
   try {
     uni.removeStorageSync(CID_KEY)
-  } catch (e) {}
+  } catch (e) {
+    reportCaught('notify.unregisterPushClient', e)
+  }
 }
 
 export function alertNewMessage(conv) {
@@ -721,7 +758,9 @@ export function installNotifyListener() {
     if (typeof plus !== 'undefined' && plus.runtime && typeof plus.runtime.isAgreePrivacy === 'function' && !plus.runtime.isAgreePrivacy()) {
       return
     }
-  } catch (e) {}
+  } catch (e) {
+    reportCaught('notify.installNotifyListener', e, { level: 'debug' })
+  }
   installed = true
   installPushHandlers()
   requestNotifyPermission()

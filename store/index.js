@@ -1,6 +1,7 @@
 import { reactive } from 'vue'
 import { sortConversations } from '../utils/chat-settings.js'
 import { clearAllMessageCaches } from '../utils/message-cache.js'
+import { reportCaught } from '../utils/error-report.js'
 
 const CONV_STORAGE_KEY = 'pc_conversations'
 const CONV_PERSIST_DEBOUNCE_MS = 200
@@ -15,7 +16,9 @@ function persistConversationsSoon(list) {
     persistTimer = null
     try {
       uni.setStorageSync(CONV_STORAGE_KEY, list || [])
-    } catch (e) {}
+    } catch (e) {
+      reportCaught('store.persistConversations', e)
+    }
   }, CONV_PERSIST_DEBOUNCE_MS)
 }
 
@@ -26,7 +29,9 @@ function clearPersistedConversations() {
   }
   try {
     uni.removeStorageSync(CONV_STORAGE_KEY)
-  } catch (e) {}
+  } catch (e) {
+    reportCaught('store.clearPersistedConversations', e)
+  }
 }
 
 /** HTTP 刷新时保留 store 里更新的会话摘要，避免在途请求覆盖刚到的 WS */
@@ -100,7 +105,9 @@ export function createPiniaLikeStore() {
         if (Array.isArray(cached) && cached.length) {
           state.conversations = sortConversations(cached)
         }
-      } catch (e) {}
+      } catch (e) {
+        reportCaught('store.hydrate', e)
+      }
     },
     setAuth(payload) {
       state.token = payload.accessToken
