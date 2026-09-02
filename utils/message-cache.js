@@ -1,3 +1,5 @@
+import { reportCaught } from './error-report.js'
+
 /**
  * 会话最近一页消息本地缓存：冷启动/进房先渲染，再由网络刷新。
  * 仅缓存已落库消息（有 id、非 streaming），每会话最多 MAX_MSGS 条。
@@ -28,7 +30,9 @@ function readIndex() {
 function writeIndex(ids) {
   try {
     uni.setStorageSync(INDEX_KEY, ids || [])
-  } catch (e) {}
+  } catch (e) {
+    reportCaught('message-cache.write', e)
+  }
 }
 
 function touchIndex(conversationId) {
@@ -40,7 +44,9 @@ function touchIndex(conversationId) {
   for (const oldId of dropped) {
     try {
       uni.removeStorageSync(storageKey(oldId))
-    } catch (e) {}
+    } catch (e) {
+    reportCaught('message-cache.remove', e, { level: 'debug' })
+  }
   }
 }
 
@@ -93,7 +99,7 @@ export function setCachedMessages(conversationId, messages) {
     uni.setStorageSync(storageKey(id), rows)
     touchIndex(id)
   } catch (e) {
-    // 存储满等失败时忽略，不影响主流程
+    reportCaught('message-cache.write', e)
   }
 }
 
@@ -122,7 +128,9 @@ export function clearCachedMessages(conversationId) {
   }
   try {
     uni.removeStorageSync(storageKey(id))
-  } catch (e) {}
+  } catch (e) {
+    reportCaught('message-cache.write', e, { level: 'debug' })
+  }
   writeIndex(readIndex().filter((x) => x !== id))
 }
 
@@ -133,9 +141,13 @@ export function clearAllMessageCaches() {
   for (const id of ids) {
     try {
       uni.removeStorageSync(storageKey(id))
-    } catch (e) {}
+    } catch (e) {
+    reportCaught('message-cache.write', e, { level: 'debug' })
+  }
   }
   try {
     uni.removeStorageSync(INDEX_KEY)
-  } catch (e) {}
+  } catch (e) {
+    reportCaught('message-cache.remove', e, { level: 'debug' })
+  }
 }

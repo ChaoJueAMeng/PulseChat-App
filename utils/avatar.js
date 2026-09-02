@@ -2,6 +2,7 @@ import { api } from './request.js'
 import { getStore } from '../store/index.js'
 import { cacheLocalAs } from './image-cache.js'
 import { pickImages } from './media-pick.js'
+import { reportCaught } from './error-report.js'
 
 /** 无自定义头像时的默认占位图（本地静态资源） */
 export const DEFAULT_AVATAR = '/static/avatar-default.png'
@@ -22,7 +23,9 @@ export async function pickAndUploadAvatar() {
   try {
     const up = await api.upload(filePath, { category: 'avatar' })
     if (up?.url) {
-      try { await cacheLocalAs(up.url, filePath) } catch (e) {}
+      try { await cacheLocalAs(up.url, filePath) } catch (e) {
+    reportCaught('avatar.catch', e)
+  }
     }
     const user = await api.updateMe({ avatar: up.url })
     const store = getStore()

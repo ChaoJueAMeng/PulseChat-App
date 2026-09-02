@@ -1,3 +1,5 @@
+import { reportCaught } from './error-report.js'
+
 const BG_KEY = 'pc_conv_bg'
 
 
@@ -24,7 +26,9 @@ function writeMap(key, map) {
 
     uni.setStorageSync(key, map || {})
 
-  } catch (e) {}
+  } catch (e) {
+    reportCaught('chat-settings.write', e)
+  }
 
 }
 

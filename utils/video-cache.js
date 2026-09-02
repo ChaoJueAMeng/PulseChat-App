@@ -1,4 +1,5 @@
 import { fullUrl } from './url.js'
+import { reportCaught } from './error-report.js'
 
 const CACHE_KEY = 'pc_video_cache_v1'
 /** 视频体积大，条目数低于图片缓存 */
@@ -26,7 +27,9 @@ function readMap() {
 function writeMap(map) {
   try {
     uni.setStorageSync(CACHE_KEY, map || {})
-  } catch (e) {}
+  } catch (e) {
+    reportCaught('video-cache.write', e)
+  }
 }
 
 function getDiskMap() {
@@ -106,7 +109,9 @@ function fileExists(filePath) {
         )
         return
       }
-    } catch (e) {}
+    } catch (e) {
+    reportCaught('video-cache.catch', e)
+  }
     uni.getFileInfo({
       filePath,
       success: () => resolve(true),
@@ -168,7 +173,9 @@ export function abortVideoDownload(path) {
   if (!remote) return
   const task = inflightTasks.get(remote)
   if (task && typeof task.abort === 'function') {
-    try { task.abort() } catch (e) {}
+    try { task.abort() } catch (e) {
+    reportCaught('video-cache.abort', e, { level: 'debug' })
+  }
   }
 }
 
@@ -178,7 +185,9 @@ function isWebLike() {
       const sys = uni.getSystemInfoSync?.() || {}
       return sys.uniPlatform === 'web' || sys.platform === 'devtools'
     }
-  } catch (e) {}
+  } catch (e) {
+    reportCaught('video-cache.catch', e)
+  }
   return false
 }
 

@@ -1,3 +1,5 @@
+import { reportCaught } from './error-report.js'
+
 /**
  * 返回键：优先关闭主题浮层；Tab 根页双击退出用主题 Toast
  * （替代系统白底「再按一次退出应用」）
@@ -56,7 +58,9 @@ export function handlePageBackPress(options = {}) {
         plus.runtime.quit()
       }
     } catch (e) {
-      try { plus.runtime.quit() } catch (e2) {}
+      try { plus.runtime.quit() } catch (e2) {
+    reportCaught('quit.catch', e2, { level: 'debug' })
+  }
     }
     // #endif
     return true
