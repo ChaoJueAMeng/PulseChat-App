@@ -2,8 +2,8 @@
     "name" : "脉冲",
     "appid" : "__UNI__BC66A18",
     "description" : "霓虹脉冲实时聊天",
-    "versionName" : "1.0.3.001",
-    "versionCode" : 1030001,
+    "versionName" : "1.0.4.001",
+    "versionCode" : 1040001,
     "transformPx" : false,
     "app-plus" : {
         "usingComponents" : true,
