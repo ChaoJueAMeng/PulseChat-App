@@ -1,6 +1,7 @@
 import { BASE_URL } from './config.js'
 import { getStore } from '../store/index.js'
 import { uploadPathCandidates } from './media-msg.js'
+import { disconnectWs } from './ws.js'
 
 /** 仅对网络层 fail 做 Toast 节流：断网期间只弹一次，网络恢复(任意请求成功)后重置 */
 let networkToastShown = false
@@ -42,6 +43,7 @@ function applySlideRenewHeaders(resHeaders) {
 function forceReLogin(message, silent) {
   const store = getStore()
   store.clearAuth()
+  disconnectWs()
   if (!silent) {
     uni.showToast({ title: message || '请重新登录', icon: 'none' })
   }

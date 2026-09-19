@@ -2,12 +2,19 @@ import { WS_URL } from './config.js'
 import { getStore } from '../store/index.js'
 import { reportCaught } from './error-report.js'
 
+const HEARTBEAT_MS = 10000
+const MAX_RECV_BUF = 1024 * 1024
+
 let socketTask = null
 let heartbeatTimer = null
 let reconnectTimer = null
 /** 连接世代：主动重建时递增，忽略旧 socket 的 close/error */
 let connId = 0
 let reconnectAttempts = 0
+/** 当前这条连接使用的 token，用于避免同凭证重复握手 */
+let connectedToken = ''
+/** 未拼完的 STOMP 半包 */
+let recvBuf = ''
 /** 是否正在主动关闭（避免触发自动重连） */
 let closingIntentionally = false
 /** App 进入后台时主动暂停 WS，期间禁止自动重连 */
@@ -115,15 +122,121 @@ function closeSocketSoft() {
   }
 }
 
+function parseStompFrame(raw) {
+  const text = String(raw || '').replace(/^\u0000+/, '')
+  if (!text.trim()) return null
+  const sep = text.match(/\r?\n\r?\n/)
+  const head = sep ? text.slice(0, sep.index) : text
+  const body = sep ? text.slice(sep.index + sep[0].length).replace(/\0+$/, '') : ''
+  const lines = head.split(/\r?\n/)
+  const command = String(lines[0] || '').trim()
+  if (!command) return null
+  const headers = Object.create(null)
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i]
+    const idx = line.indexOf(':')
+    if (idx < 0) continue
+    const key = line.slice(0, idx).trim()
+    const val = line.slice(idx + 1).trim()
+    if (key) headers[key] = val
+  }
+  return { command, headers, body }
+}
+
+function consumeRecvBuffer(onFrame) {
+  while (true) {
+    recvBuf = recvBuf.replace(/^[\r\n]+/, '')
+    const nul = recvBuf.indexOf('\0')
+    if (nul < 0) {
+      if (recvBuf.length > MAX_RECV_BUF) recvBuf = ''
+      return
+    }
+    const raw = recvBuf.slice(0, nul)
+    recvBuf = recvBuf.slice(nul + 1)
+    if (!raw.trim()) continue
+    onFrame(raw)
+  }
+}
+
+function dispatchMessage(destination, body) {
+  emit('message', { destination, body })
+  if (destination.includes('/topic/conversation.') && destination.endsWith('.ai')) {
+    if (body && typeof body === 'object') emit('ai', body)
+  } else if (destination.includes('/topic/conversation.') && destination.endsWith('.typing')) {
+    if (body && typeof body === 'object') emit('typing', body)
+  } else if (destination.includes('/topic/conversation.') && destination.endsWith('.react')) {
+    if (body && typeof body === 'object') emit('react', body)
+  } else if (destination.includes('/topic/conversation.')) {
+    if (body && typeof body === 'object' && (body.type === 'reaction' || body.type === 'message_react')) {
+      emit('react', body)
+    } else if (body && typeof body === 'object') {
+      emit('chat', body)
+    }
+  } else if (destination.includes('/topic/presence')) {
+    if (body && typeof body === 'object' && body.userId != null) {
+      getStore().setOnline(body.userId, body.online)
+      emit('presence', body)
+    }
+  } else if (destination.includes('/queue/notify')) {
+    if (body && typeof body === 'object' && (body.type === 'reaction' || body.type === 'message_react')) {
+      emit('react', body.payload || body)
+    } else if (body != null) {
+      emit('notify', body)
+    }
+  }
+}
+
+function handleStompFrame(raw, myId, store) {
+  const frame = parseStompFrame(raw)
+  if (!frame) return
+  const command = frame.command.toUpperCase()
+  if (command === 'CONNECTED') {
+    connecting = false
+    reconnectAttempts = 0
+    store.setConnected(true)
+    resubscribeActiveDestinations(myId)
+    startHeartbeat()
+    emit('connected')
+    return
+  }
+  if (command === 'ERROR') {
+    const tip = frame.headers.message || frame.body || 'STOMP ERROR'
+    reportCaught('ws.stomp.error', new Error(String(tip).slice(0, 200)))
+    connecting = false
+    store.setConnected(false)
+    stopHeartbeat()
+    closeSocketSoft()
+    closingIntentionally = false
+    if (getStore().state.token && !pausedForBackground) scheduleReconnect()
+    return
+  }
+  if (command !== 'MESSAGE') return
+  const destination = frame.headers.destination || ''
+  let body = null
+  try {
+    body = frame.body ? JSON.parse(frame.body) : null
+  } catch (e) {
+    body = frame.body
+  }
+  dispatchMessage(destination, body)
+}
+
 export function connectWs(token) {
   if (!token) return
   pausedForBackground = false
+  const store = getStore()
+  if (socketTask && (store.state.connected || connecting) && connectedToken === token) {
+    return
+  }
+  if (token !== connectedToken) {
+    reconnectAttempts = 0
+  }
+  connectedToken = token
   clearReconnectTimer()
   closeSocketSoft()
-  reconnectAttempts = 0
+  recvBuf = ''
 
   const myId = ++connId
-  const store = getStore()
   connecting = true
   store.setConnected(false)
 
@@ -140,7 +253,7 @@ export function connectWs(token) {
     const connectFrame =
       'CONNECT\n' +
       'accept-version:1.2\n' +
-      'heart-beat:10000,10000\n' +
+      'heart-beat:' + HEARTBEAT_MS + ',' + HEARTBEAT_MS + '\n' +
       'Authorization:Bearer ' + token + '\n\n\0'
     try {
       task.send({ data: connectFrame })
@@ -153,51 +266,9 @@ export function connectWs(token) {
   task.onMessage((res) => {
     if (myId !== connId || socketTask !== task) return
     const data = typeof res.data === 'string' ? res.data : ''
-    if (data.startsWith('CONNECTED')) {
-      connecting = false
-      reconnectAttempts = 0
-      store.setConnected(true)
-      resubscribeActiveDestinations(myId)
-      startHeartbeat()
-      emit('connected')
-      return
-    }
-    if (data.startsWith('MESSAGE')) {
-      const bodyIdx = data.indexOf('\n\n')
-      if (bodyIdx < 0) return
-      const headers = data.slice(0, bodyIdx)
-      const bodyRaw = data.slice(bodyIdx + 2).replace(/\0$/, '')
-      const destLine = headers.split('\n').find(l => l.startsWith('destination:'))
-      const destination = destLine ? destLine.slice('destination:'.length) : ''
-      let body = null
-      try { body = JSON.parse(bodyRaw) } catch (e) { body = bodyRaw }
-      emit('message', { destination, body })
-      if (destination.includes('/topic/conversation.') && destination.endsWith('.ai')) {
-        if (body && typeof body === 'object') emit('ai', body)
-      } else if (destination.includes('/topic/conversation.') && destination.endsWith('.typing')) {
-        if (body && typeof body === 'object') emit('typing', body)
-      } else if (destination.includes('/topic/conversation.') && destination.endsWith('.react')) {
-        if (body && typeof body === 'object') emit('react', body)
-      } else if (destination.includes('/topic/conversation.')) {
-        // 会话主题也可能推送 reaction 事件
-        if (body && typeof body === 'object' && (body.type === 'reaction' || body.type === 'message_react')) {
-          emit('react', body)
-        } else if (body && typeof body === 'object') {
-          emit('chat', body)
-        }
-      } else if (destination.includes('/topic/presence')) {
-        if (body && typeof body === 'object' && body.userId != null) {
-          store.setOnline(body.userId, body.online)
-          emit('presence', body)
-        }
-      } else if (destination.includes('/queue/notify')) {
-        if (body && typeof body === 'object' && (body.type === 'reaction' || body.type === 'message_react')) {
-          emit('react', body.payload || body)
-        } else if (body != null) {
-          emit('notify', body)
-        }
-      }
-    }
+    if (!data) return
+    recvBuf += data
+    consumeRecvBuffer((raw) => handleStompFrame(raw, myId, store))
   })
 
   task.onClose(() => {
@@ -206,6 +277,7 @@ export function connectWs(token) {
     connecting = false
     store.setConnected(false)
     stopHeartbeat()
+    recvBuf = ''
     const intentional = closingIntentionally
     closingIntentionally = false
     if (intentional) return
@@ -227,9 +299,27 @@ export function connectWs(token) {
       }
       socketTask = null
       stopHeartbeat()
+      recvBuf = ''
       if (getStore().state.token) scheduleReconnect()
     }
   })
+}
+
+/** 登出或强制重新登录时关掉通道，并禁止按旧 token 重连 */
+export function disconnectWs() {
+  pausedForBackground = false
+  clearReconnectTimer()
+  stopHeartbeat()
+  connecting = false
+  connectedToken = ''
+  recvBuf = ''
+  reconnectAttempts = 0
+  closeSocketSoft()
+  try {
+    getStore().setConnected(false)
+  } catch (e) {
+    reportCaught('ws.disconnectWs.setConnected', e)
+  }
 }
 
 /** 前台恢复时确保通道可用；已连上或握手中则跳过，避免掐断进行中的连接 */
@@ -256,6 +346,7 @@ export function pauseWsForBackground() {
   }
   connecting = false
   closeSocketSoft()
+  recvBuf = ''
   try {
     getStore().setConnected(false)
   } catch (e) {
@@ -331,11 +422,13 @@ export function sendStomp(destination, payload) {
 
 function startHeartbeat() {
   stopHeartbeat()
-  // 连上立刻打一次，缩短 presence 空窗，避免误发离线推送
+  // 协议心跳对齐 CONNECT 声明；业务心跳给服务端 presence
+  sendFrame('\n')
   sendStomp('/app/chat.heartbeat', {})
   heartbeatTimer = setInterval(() => {
+    sendFrame('\n')
     sendStomp('/app/chat.heartbeat', {})
-  }, 20000)
+  }, HEARTBEAT_MS)
 }
 
 function stopHeartbeat() {
