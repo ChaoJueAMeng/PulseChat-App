@@ -24,16 +24,20 @@
           @tap="previewAvatar"
         />
         <view class="info">
-          <text class="name">{{ displayName }}</text>
+          <view class="name-row">
+            <text class="name">{{ displayName }}</text>
+            <text v-if="isSelf" class="tag me">我</text>
+            <text v-else-if="isFriend" class="tag">好友</text>
+          </view>
           <text v-if="remark && user?.nickname" class="nick">昵称 {{ user.nickname }}</text>
-          <text class="acc">账号 {{ user?.account }}</text>
-          <text class="phone">{{ user?.phone }}</text>
+          <text v-if="user?.account" class="acc">账号 {{ user.account }}</text>
+          <text v-if="user?.phone" class="phone">{{ user.phone }}</text>
         </view>
       </view>
 
       <view class="bio pc-card pc-enter" style="animation-delay: 0.08s">
         <text class="label">个性签名</text>
-        <text class="text">{{ user?.bio || '这个人很酷，什么都没写' }}</text>
+        <text class="text" :class="{ placeholder: !user?.bio }">{{ user?.bio || '这个人很酷，什么都没写' }}</text>
       </view>
 
       <view
@@ -48,7 +52,11 @@
           :class="{ danger: item.danger }"
           @tap="onActionSelect(item.key)"
         >
-          <text>{{ item.label }}</text>
+          <view class="pc-item-ico" :class="{ danger: item.danger }">{{ item.icon }}</view>
+          <text class="item-label">{{ item.label }}</text>
+          <text v-if="item.value" class="item-value">{{ item.value }}</text>
+          <view v-if="item.toggle" class="dot" :class="{ on: item.on }"></view>
+          <view v-else class="pc-chevron"></view>
         </view>
       </view>
 
@@ -114,11 +122,11 @@ const displayName = computed(() => remark.value || user.value?.nickname || '用�
 const moreItems = computed(() => {
   if (!isFriend.value || isSelf.value) return []
   return [
-    { key: 'remark', label: remark.value ? '修改备注' : '设置备注' },
-    { key: 'pin', label: pinned.value ? '取消置顶' : '设为置顶' },
-    { key: 'notify', label: muted.value ? '开启消息通知' : '消息通知设置' },
-    { key: 'bg', label: chatBg.value ? '清除聊天背景' : '设置聊天背景' },
-    { key: 'delete', label: '删除好友', danger: true }
+    { key: 'remark', icon: '✎', label: '备注', value: remark.value || '未设置' },
+    { key: 'pin', icon: '⇈', label: '置顶聊天', toggle: true, on: pinned.value },
+    { key: 'notify', icon: '♪', label: '消息通知', toggle: true, on: !muted.value },
+    { key: 'bg', icon: '▣', label: '聊天背景', value: chatBg.value ? '已设置' : '默认' },
+    { key: 'delete', icon: '⌫', label: '删除好友', danger: true }
   ]
 })
 
@@ -325,26 +333,26 @@ async function togglePin() {
   }
 }
 
+let mutePending = false
+
+/** 通知开关可随时反向切换，直接执行即可，无需二次确认 */
 function toggleMute() {
-  if (muted.value) {
-    applyMute(false)
-    return
-  }
-  uni.showActionSheet({
-    itemList: ['关闭消息通知'],
-    success: (res) => {
-      if (res.tapIndex === 0) applyMute(true)
-    }
-  })
+  applyMute(!muted.value)
 }
 
 async function applyMute(next) {
+  if (mutePending) return
+  mutePending = true
   try {
     const id = await ensureConv()
     await api.updateConvSettings(id, { mute: next ? 1 : 0 })
     muted.value = next
+    try { uni.vibrateShort && uni.vibrateShort({ type: 'light' }) } catch (e) {}
     uni.showToast({ title: next ? '已关闭通知' : '已开启通知', icon: 'none' })
-  } catch (e) {}
+  } catch (e) {
+  } finally {
+    mutePending = false
+  }
 }
 
 async function pickChatBackground() {
@@ -433,18 +441,36 @@ function confirmDeleteFriend() {
   border-radius: $pc-radius-xl;
   margin-bottom: 22rpx;
 }
-.name { display: block; font-size: 36rpx; font-weight: 800; color: $pc-text; }
+.info { flex: 1; min-width: 0; }
+.name-row { display: flex; align-items: center; gap: 12rpx; min-width: 0; }
+.name {
+  font-size: 36rpx; font-weight: 800; color: $pc-text;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+.tag {
+  flex-shrink: 0;
+  font-size: 20rpx;
+  color: $pc-purple;
+  padding: 2rpx 12rpx;
+  border-radius: $pc-radius-pill;
+  background: rgba(167, 139, 250, 0.14);
+  &.me { color: $pc-muted; background: rgba(255, 255, 255, 0.08); }
+}
 .nick, .acc, .phone { display: block; color: $pc-muted; font-size: 22rpx; margin-top: 8rpx; }
 .bio { border-radius: $pc-radius-lg; margin-bottom: 22rpx; }
 .label { display: block; color: $pc-muted; font-size: 22rpx; padding: 24rpx 30rpx 8rpx; }
 .text { display: block; color: $pc-text; font-size: 28rpx; padding: 0 30rpx 30rpx; line-height: 1.5; }
+.text.placeholder { color: #6B5C7A; }
 .menu {
   border-radius: $pc-radius-lg;
   padding: 8rpx 0;
   margin-bottom: 22rpx;
 }
 .item {
-  padding: 30rpx 30rpx;
+  display: flex;
+  align-items: center;
+  gap: 20rpx;
+  padding: 24rpx 26rpx;
   color: $pc-text;
   font-size: 28rpx;
   border-bottom: 1px solid rgba(167, 139, 250, 0.08);
@@ -454,6 +480,38 @@ function confirmDeleteFriend() {
 .item:last-child { border-bottom: none; }
 .item.danger { color: $pc-red; }
 .item.danger:active { background: rgba(244, 63, 94, 0.12); }
+.item-label { flex: 1; min-width: 0; }
+.item-value {
+  flex-shrink: 1; min-width: 0; max-width: 260rpx;
+  color: $pc-muted; font-size: 22rpx;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+/* 开关点：置顶 / 通知状态一眼可见 */
+.dot {
+  flex-shrink: 0;
+  width: 64rpx;
+  height: 36rpx;
+  border-radius: 999rpx;
+  background: rgba(155, 138, 175, 0.25);
+  position: relative;
+  transition: background 0.2s ease;
+  margin-right: 4rpx;
+  &::after {
+    content: '';
+    position: absolute;
+    top: 4rpx;
+    left: 4rpx;
+    width: 28rpx;
+    height: 28rpx;
+    border-radius: 50%;
+    background: #F5EDFF;
+    transition: transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  &.on {
+    background: linear-gradient(120deg, $pc-purple-deep, $pc-purple);
+    &::after { transform: translateX(28rpx); }
+  }
+}
 .actions { padding: 0 8rpx; }
 .incoming-actions { display: flex; flex-direction: column; gap: 16rpx; }
 .reject-btn {
