@@ -21,15 +21,26 @@
       :bounces="true"
     >
       <view v-if="removeMode && isOwner" class="tip pc-enter">选择要移除的成员（不可移除自己与群主）</view>
-      <view v-if="!members.length" class="empty">暂无成员</view>
+
+      <template v-if="loading && !members.length">
+        <view v-for="i in 5" :key="'sk-' + i" class="pc-skeleton pc-skeleton--row"></view>
+      </template>
+
+      <view v-else-if="!members.length" class="pc-empty">
+        <view class="pc-empty__icon">◎</view>
+        <text class="pc-empty__title">暂无成员</text>
+        <text class="pc-empty__sub">{{ isOwner ? '点击右上角「添加」邀请好友加入' : '群里还没有其他成员' }}</text>
+      </view>
+
       <view
         v-for="(m, idx) in members"
         :key="m.userId"
         class="row pc-card pc-press pc-enter"
-        :style="{ animationDelay: (idx * 0.03) + 's' }"
+        :class="{ 'is-removable': removeMode && isOwner && canRemove(m), 'is-locked': removeMode && !canRemove(m) }"
+        :style="{ animationDelay: (Math.min(idx, 12) * 0.03) + 's' }"
         @tap="onRowTap(m)"
       >
-        <pc-avatar :url="m.avatar" :name="m.nickname" :size="80" :seed="m.userId" />
+        <pc-avatar :url="m.avatar" :name="m.nickname" :size="80" :seed="m.userId" :show-badge="isBot(m)" />
         <view class="meta">
           <view class="name-row">
             <text class="name">{{ displayName(m) }}</text>
@@ -39,11 +50,14 @@
           </view>
           <text class="sub">{{ roleHint(m) }}</text>
         </view>
-        <text
+        <view
           v-if="removeMode && isOwner && canRemove(m)"
-          class="remove pc-press"
+          class="pc-pill danger pc-press"
           @tap.stop="confirmRemove(m)"
-        >移除</text>
+        >
+          <text>移除</text>
+        </view>
+        <view v-else-if="!removeMode && !isSelf(m) && !isBot(m)" class="pc-chevron"></view>
       </view>
     </scroll-view>
   </view>
@@ -65,6 +79,7 @@ const groupTitle = ref('')
 const members = ref([])
 const ownerId = ref(null)
 const removeMode = ref(false)
+const loading = ref(false)
 const statusBarHeight = uni.getSystemInfoSync().statusBarHeight || 20
 const headerStyle = computed(() => ({ paddingTop: statusBarHeight + 'px' }))
 
@@ -74,7 +89,10 @@ const isOwner = computed(() => {
   const me = myId.value
   return me != null && ownerId.value != null && Number(me) === Number(ownerId.value)
 })
-const pageTitle = computed(() => removeMode.value ? '移除成员' : '群成员')
+const pageTitle = computed(() => {
+  if (removeMode.value) return '移除成员'
+  return members.value.length ? `群成员（${members.value.length}）` : '群成员'
+})
 
 function goBack() {
   uni.navigateBack()
@@ -110,19 +128,25 @@ function roleHint(m) {
 
 async function load() {
   if (!conversationId.value) return
-  const detail = await api.conversation(conversationId.value)
-  ownerId.value = detail.ownerId != null ? Number(detail.ownerId) : null
-  if (removeMode.value && !isOwner.value) {
-    removeMode.value = false
+  loading.value = true
+  try {
+    const detail = await api.conversation(conversationId.value)
+    ownerId.value = detail.ownerId != null ? Number(detail.ownerId) : null
+    if (removeMode.value && !isOwner.value) {
+      removeMode.value = false
+    }
+    // 会话详情已含成员列表，避免再打独立 /members（旧后端无此接口会弹「接口不存在」）
+    const list = detail.members || []
+    // 群主排前面，其次普通成员，AI 助手放最后
+    members.value = [...list].sort((a, b) => {
+      const ao = isOwnerRole(a) ? 0 : (isBot(a) ? 2 : 1)
+      const bo = isOwnerRole(b) ? 0 : (isBot(b) ? 2 : 1)
+      return ao - bo
+    })
+  } catch (e) {
+  } finally {
+    loading.value = false
   }
-  // 会话详情已含成员列表，避免再打独立 /members（旧后端无此接口会弹「接口不存在」）
-  members.value = detail.members || []
-  // 群主排前面
-  members.value = [...members.value].sort((a, b) => {
-    const ao = isOwnerRole(a) ? 0 : (isBot(a) ? 2 : 1)
-    const bo = isOwnerRole(b) ? 0 : (isBot(b) ? 2 : 1)
-    return ao - bo
-  })
 }
 
 function goAdd() {
@@ -229,12 +253,6 @@ onShow(() => {
   margin-bottom: 18rpx;
   padding: 0 8rpx;
 }
-.empty {
-  color: $pc-muted;
-  text-align: center;
-  padding: 80rpx 0;
-  font-size: 26rpx;
-}
 .row {
   display: flex;
   align-items: center;
@@ -242,6 +260,9 @@ onShow(() => {
   padding: 22rpx 24rpx;
   margin-bottom: 14rpx;
   border-radius: $pc-radius-lg;
+  transition: opacity 0.18s ease, border-color 0.18s ease;
+  &.is-removable { border-color: rgba(244, 63, 94, 0.28); }
+  &.is-locked { opacity: 0.55; }
 }
 .meta { flex: 1; min-width: 0; }
 .name-row {
@@ -276,10 +297,5 @@ onShow(() => {
   color: $pc-muted;
   font-size: 22rpx;
   margin-top: 6rpx;
-}
-.remove {
-  color: $pc-red;
-  font-size: 26rpx;
-  padding: 12rpx 8rpx;
 }
 </style>
