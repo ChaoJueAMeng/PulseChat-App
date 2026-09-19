@@ -44,7 +44,8 @@ function schedulePersist() {
     persistTimer = null
     if (!diskDirty || !diskMap) return
     diskDirty = false
-    writeMap(trimCache(diskMap))
+    diskMap = trimCache(diskMap)
+    writeMap(diskMap)
   }, 800)
 }
 
@@ -65,11 +66,28 @@ function normalizeRemote(path) {
   return fullUrl(path)
 }
 
+function removeSavedFile(filePath) {
+  if (!filePath) return
+  try {
+    uni.removeSavedFile({
+      filePath,
+      fail: () => {}
+    })
+  } catch (e) {
+    reportCaught('video-cache.removeSavedFile', e, { level: 'debug' })
+  }
+}
+
 function trimCache(map) {
   const entries = Object.entries(map)
   if (entries.length <= MAX_ENTRIES) return map
   entries.sort((a, b) => (a[1]?.at || 0) - (b[1]?.at || 0))
+  const evicted = entries.slice(0, entries.length - MAX_ENTRIES)
   const keep = entries.slice(entries.length - MAX_ENTRIES)
+  evicted.forEach(([k, v]) => {
+    memory.delete(k)
+    if (v?.local) removeSavedFile(v.local)
+  })
   const next = {}
   keep.forEach(([k, v]) => { next[k] = v })
   return next
@@ -89,7 +107,9 @@ export function forgetVideoCached(path) {
   memory.delete(remote)
   const map = getDiskMap()
   if (map[remote]) {
+    const local = map[remote].local
     delete map[remote]
+    if (local) removeSavedFile(local)
     schedulePersist()
   }
 }
@@ -158,10 +178,18 @@ export function peekVideoCached(path) {
   if (!remote) return ''
   if (isLocalMediaPath(remote)) return remote
   const mem = memory.get(remote)
-  if (mem) return mem
+  if (mem) {
+    fileExists(mem).then((ok) => {
+      if (!ok) forgetVideoCached(remote)
+    }).catch(() => {})
+    return mem
+  }
   const hit = getDiskMap()[remote]
   if (hit?.local) {
     memory.set(remote, hit.local)
+    fileExists(hit.local).then((ok) => {
+      if (!ok) forgetVideoCached(remote)
+    }).catch(() => {})
     return hit.local
   }
   return ''
@@ -192,7 +220,8 @@ function isWebLike() {
 }
 
 /**
- * 同步取展示地址：有本地缓存则返回本地，否则返回网络地址并后台预取
+ * 同步取展示地址：有本地缓存则返回本地，否则返回网络地址。
+ * 不在列表阶段隐式下载整片，播放时再走 ensureVideoCached。
  */
 export function getVideoDisplayUrl(path) {
   if (!path) return ''
@@ -203,18 +232,21 @@ export function getVideoDisplayUrl(path) {
 
   const mem = memory.get(remote)
   if (mem) {
-    ensureVideoCached(remote).catch(() => {})
+    fileExists(mem).then((ok) => {
+      if (!ok) forgetVideoCached(remote)
+    }).catch(() => {})
     return mem
   }
 
   const hit = getDiskMap()[remote]
   if (hit?.local) {
     memory.set(remote, hit.local)
-    ensureVideoCached(remote).catch(() => {})
+    fileExists(hit.local).then((ok) => {
+      if (!ok) forgetVideoCached(remote)
+    }).catch(() => {})
     return hit.local
   }
 
-  ensureVideoCached(remote).catch(() => {})
   return remote
 }
 

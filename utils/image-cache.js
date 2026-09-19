@@ -44,7 +44,8 @@ function schedulePersist() {
     persistTimer = null
     if (!diskDirty || !diskMap) return
     diskDirty = false
-    writeMap(trimCache(diskMap))
+    diskMap = trimCache(diskMap)
+    writeMap(diskMap)
   }, 600)
 }
 
@@ -68,11 +69,28 @@ function normalizeRemote(path) {
   return fullUrl(path)
 }
 
+function removeSavedFile(filePath) {
+  if (!filePath) return
+  try {
+    uni.removeSavedFile({
+      filePath,
+      fail: () => {}
+    })
+  } catch (e) {
+    reportCaught('image-cache.removeSavedFile', e, { level: 'debug' })
+  }
+}
+
 function trimCache(map) {
   const entries = Object.entries(map)
   if (entries.length <= MAX_ENTRIES) return map
   entries.sort((a, b) => (a[1]?.at || 0) - (b[1]?.at || 0))
+  const evicted = entries.slice(0, entries.length - MAX_ENTRIES)
   const keep = entries.slice(entries.length - MAX_ENTRIES)
+  evicted.forEach(([k, v]) => {
+    memory.delete(k)
+    if (v?.local) removeSavedFile(v.local)
+  })
   const next = {}
   keep.forEach(([k, v]) => { next[k] = v })
   return next
@@ -92,7 +110,9 @@ export function forgetCached(path) {
   memory.delete(remote)
   const map = getDiskMap()
   if (map[remote]) {
+    const local = map[remote].local
     delete map[remote]
+    if (local) removeSavedFile(local)
     schedulePersist()
   }
 }
@@ -263,9 +283,31 @@ export async function cacheLocalAs(remotePath, localTempPath) {
   }
 }
 
-/** 批量预热（聊天页图片消息等） */
+const PREFETCH_CONCURRENCY = 3
+const prefetchQueue = []
+const prefetchQueued = new Set()
+let prefetchActive = 0
+
+function pumpPrefetch() {
+  while (prefetchActive < PREFETCH_CONCURRENCY && prefetchQueue.length) {
+    const path = prefetchQueue.shift()
+    prefetchQueued.delete(path)
+    prefetchActive++
+    ensureCached(path)
+      .catch(() => {})
+      .finally(() => {
+        prefetchActive--
+        pumpPrefetch()
+      })
+  }
+}
+
+/** 批量预热（聊天页图片消息等），限制并发以免进房打满下载 */
 export function prefetchAll(paths = []) {
   ;(paths || []).forEach((p) => {
-    if (p) ensureCached(p).catch(() => {})
+    if (!p || prefetchQueued.has(p)) return
+    prefetchQueued.add(p)
+    prefetchQueue.push(p)
   })
+  pumpPrefetch()
 }
