@@ -11,6 +11,8 @@
  * 1) 右键 database →「上传所有 DB Schema」
  * 2) 右键本云函数 →「上传并部署」
  * 3) 云函数详情开启「URL 化」，把 HTTPS 地址配到 pulsechat.push.cloud-url
+ * 4) 生产请配置环境变量 PULSECHAT_PUSH_SECRET，后端调用时带同一密钥
+ *    （body.secret / body.push_secret / 头 x-push-secret）。未配置时保持兼容。
  *
  * 注意：successed_offline / successed_online 只表示个推/DCloud 已受理，
  * 不等于通知栏一定展示。进程被杀且无厂商通道时，离线常「受理成功但无栏」。
@@ -120,8 +122,39 @@ function mergeOptions(raw) {
   return Object.assign({}, DEFAULT_OPTIONS, raw, { android })
 }
 
+function readHeader(event, name) {
+  const headers = (event && (event.headers || event.header)) || {}
+  const target = String(name || '').toLowerCase()
+  const keys = Object.keys(headers)
+  for (let i = 0; i < keys.length; i++) {
+    if (String(keys[i]).toLowerCase() === target) return headers[keys[i]]
+  }
+  return ''
+}
+
+function readPushSecret() {
+  try {
+    if (typeof process !== 'undefined' && process.env && process.env.PULSECHAT_PUSH_SECRET) {
+      return String(process.env.PULSECHAT_PUSH_SECRET)
+    }
+  } catch (e) {}
+  return ''
+}
+
 exports.main = async (event) => {
   const body = parseBody(event)
+  const requiredSecret = readPushSecret()
+  if (requiredSecret) {
+    const got = String(
+      body.secret ||
+      body.push_secret ||
+      readHeader(event, 'x-push-secret') ||
+      ''
+    )
+    if (got !== requiredSecret) {
+      return { errCode: 'UNAUTHORIZED', errMsg: 'invalid push secret' }
+    }
+  }
   const cids = normalizeCids(body.push_clientid || body.cids || body.clientIds)
   if (!cids.length) {
     return { errCode: 'PARAM', errMsg: 'push_clientid required' }
