@@ -4,10 +4,12 @@ import { clearAllMessageCaches } from '../utils/message-cache.js'
 import { reportCaught } from '../utils/error-report.js'
 
 const CONV_STORAGE_KEY = 'pc_conversations'
+const WM_STORAGE_KEY = 'pc_read_watermark'
 const CONV_PERSIST_DEBOUNCE_MS = 200
 
 let _store = null
 let persistTimer = null
+let watermarkTimer = null
 let conversationsInflight = null
 
 function persistConversationsSoon(list) {
@@ -22,6 +24,18 @@ function persistConversationsSoon(list) {
   }, CONV_PERSIST_DEBOUNCE_MS)
 }
 
+function persistWatermarkSoon(map) {
+  if (watermarkTimer) clearTimeout(watermarkTimer)
+  watermarkTimer = setTimeout(() => {
+    watermarkTimer = null
+    try {
+      uni.setStorageSync(WM_STORAGE_KEY, map || {})
+    } catch (e) {
+      reportCaught('store.persistWatermark', e)
+    }
+  }, CONV_PERSIST_DEBOUNCE_MS)
+}
+
 function clearPersistedConversations() {
   if (persistTimer) {
     clearTimeout(persistTimer)
@@ -32,6 +46,28 @@ function clearPersistedConversations() {
   } catch (e) {
     reportCaught('store.clearPersistedConversations', e)
   }
+}
+
+function clearPersistedWatermark() {
+  if (watermarkTimer) {
+    clearTimeout(watermarkTimer)
+    watermarkTimer = null
+  }
+  try {
+    uni.removeStorageSync(WM_STORAGE_KEY)
+  } catch (e) {
+    reportCaught('store.clearPersistedWatermark', e)
+  }
+}
+
+function resetAccountLocalState(state) {
+  state.conversations = []
+  state.activeChatId = null
+  state.readWatermark = {}
+  conversationsInflight = null
+  clearPersistedConversations()
+  clearPersistedWatermark()
+  clearAllMessageCaches()
 }
 
 /** HTTP 刷新时保留 store 里更新的会话摘要，避免在途请求覆盖刚到的 WS */
@@ -105,11 +141,20 @@ export function createPiniaLikeStore() {
         if (Array.isArray(cached) && cached.length) {
           state.conversations = sortConversations(cached)
         }
+        const wm = uni.getStorageSync(WM_STORAGE_KEY)
+        if (wm && typeof wm === 'object' && !Array.isArray(wm)) {
+          state.readWatermark = wm
+        }
       } catch (e) {
         reportCaught('store.hydrate', e)
       }
     },
     setAuth(payload) {
+      const prevId = state.user?.id
+      const nextId = payload?.user?.id
+      if (prevId != null && nextId != null && Number(prevId) !== Number(nextId)) {
+        resetAccountLocalState(state)
+      }
       state.token = payload.accessToken
       state.refreshToken = payload.refreshToken
       state.user = payload.user
@@ -132,15 +177,10 @@ export function createPiniaLikeStore() {
       state.token = ''
       state.refreshToken = ''
       state.user = null
-      state.conversations = []
-      state.activeChatId = null
-      state.readWatermark = {}
-      conversationsInflight = null
+      resetAccountLocalState(state)
       uni.removeStorageSync('pc_token')
       uni.removeStorageSync('pc_refresh')
       uni.removeStorageSync('pc_user')
-      clearPersistedConversations()
-      clearAllMessageCaches()
     },
     setConversations(list) {
       state.conversations = sortConversations(list || [])
@@ -190,6 +230,7 @@ export function createPiniaLikeStore() {
         const prev = Number(state.readWatermark[id]) || 0
         if (msgId > prev) {
           state.readWatermark = { ...state.readWatermark, [id]: msgId }
+          persistWatermarkSoon(state.readWatermark)
         }
       }
       const old = (state.conversations || []).find(c => Number(c.id) === id)
