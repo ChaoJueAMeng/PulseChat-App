@@ -8,50 +8,110 @@
     <view class="panel pc-card pc-enter" style="animation-delay: 0.1s">
       <view class="field">
         <text class="label">邮箱</text>
-        <input class="input" v-model="email" placeholder="请输入邮箱" placeholder-class="ph" />
+        <input
+          class="input pc-input"
+          :class="fieldClass('email')"
+          v-model="email"
+          placeholder="请输入邮箱"
+          placeholder-class="ph"
+          confirm-type="next"
+          @focus="onFocus('email')"
+          @blur="onBlur"
+          @confirm="focusNext('code')"
+        />
       </view>
       <view class="field">
         <text class="label">验证码</text>
         <view class="input-row">
-          <input class="input flex" type="number" maxlength="6" v-model="code" placeholder="6位验证码" placeholder-class="ph" />
-          <text class="code-btn" :class="{ disabled: codeSeconds > 0 || sending }" @tap="sendRegisterCode">
-            {{ codeSeconds > 0 ? codeSeconds + 's' : (sending ? '发送中' : '获取验证码') }}
+          <input
+            class="input flex pc-input"
+            :class="fieldClass('code')"
+            :focus="focusTarget === 'code'"
+            type="number"
+            maxlength="6"
+            v-model="code"
+            placeholder="6位验证码"
+            placeholder-class="ph"
+            confirm-type="next"
+            @focus="onFocus('code')"
+            @blur="onBlur"
+            @confirm="focusNext('nickname')"
+          />
+          <text class="code-btn pc-press" :class="{ disabled: codeSeconds > 0 || sending }" @tap="sendRegisterCode">
+            {{ codeSeconds > 0 ? codeSeconds + 's 后重发' : (sending ? '发送中…' : '获取验证码') }}
           </text>
         </view>
       </view>
       <view class="field">
-        <text class="label">昵称（可选）</text>
-        <input class="input" v-model="nickname" placeholder="给你一个闪亮的名字" placeholder-class="ph" />
+        <text class="label">昵称<text class="label-opt">（可选）</text></text>
+        <input
+          class="input pc-input"
+          :class="fieldClass('nickname')"
+          :focus="focusTarget === 'nickname'"
+          v-model="nickname"
+          maxlength="64"
+          placeholder="给你一个闪亮的名字"
+          placeholder-class="ph"
+          confirm-type="next"
+          @focus="onFocus('nickname')"
+          @blur="onBlur"
+          @confirm="focusNext('password')"
+        />
       </view>
       <view class="field">
         <text class="label">密码</text>
         <view class="input-row">
           <input
-            class="input flex"
+            class="input flex pc-input"
+            :class="fieldClass('password')"
+            :focus="focusTarget === 'password'"
             :password="!showPassword"
             maxlength="32"
             v-model="password"
             placeholder="6-32位密码"
             placeholder-class="ph"
+            confirm-type="next"
+            @focus="onFocus('password')"
+            @blur="onBlur"
+            @confirm="focusNext('confirm')"
           />
-          <text class="eye" @tap="showPassword = !showPassword">{{ showPassword ? '隐藏' : '显示' }}</text>
+          <text class="eye pc-press" @tap="showPassword = !showPassword">{{ showPassword ? '隐藏' : '显示' }}</text>
+        </view>
+        <view v-if="password" class="strength">
+          <view class="strength-bar">
+            <view class="strength-fill" :class="'lv-' + strength.level" :style="{ width: strength.percent + '%' }"></view>
+          </view>
+          <text class="strength-text" :class="'lv-' + strength.level">{{ strength.label }}</text>
         </view>
       </view>
       <view class="field">
         <text class="label">确认密码</text>
         <view class="input-row">
           <input
-            class="input flex"
+            class="input flex pc-input"
+            :class="[fieldClass('confirm'), { 'is-error': confirmMismatch }]"
+            :focus="focusTarget === 'confirm'"
             :password="!showConfirm"
             maxlength="32"
             v-model="confirmPassword"
             placeholder="再次输入密码"
             placeholder-class="ph"
+            confirm-type="done"
+            @focus="onFocus('confirm')"
+            @blur="onBlur"
+            @confirm="submit"
           />
-          <text class="eye" @tap="showConfirm = !showConfirm">{{ showConfirm ? '隐藏' : '显示' }}</text>
+          <text class="eye pc-press" @tap="showConfirm = !showConfirm">{{ showConfirm ? '隐藏' : '显示' }}</text>
         </view>
+        <text v-if="confirmMismatch" class="field-error">两次输入的密码不一致</text>
       </view>
-      <button class="pc-btn enter" :loading="loading" @tap="submit">注册</button>
+      <button
+        class="pc-btn enter"
+        :class="{ 'is-busy': loading }"
+        :loading="loading"
+        :disabled="loading"
+        @tap="submit"
+      >{{ loading ? '注册中…' : '注册' }}</button>
       <view class="switch-row">
         <text class="switch-text">已有账号？</text>
         <text class="switch-link" @tap="goLogin">去登录</text>
@@ -62,14 +122,17 @@
 </template>
 
 <script setup>
-import { ref, onUnmounted } from 'vue'
+import { ref, computed, onUnmounted } from 'vue'
 import { api } from '../../utils/request.js'
 import { getStore } from '../../store/index.js'
 import { connectWs } from '../../utils/ws.js'
 import { scheduleRegisterPushClient } from '../../utils/notify.js'
+import { useFormFocus } from '../../utils/form-focus.js'
+import { reportCaught } from '../../utils/error-report.js'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
+const { focusTarget, onFocus, onBlur, fieldClass, focusNext } = useFormFocus()
 const email = ref('')
 const code = ref('')
 const nickname = ref('')
@@ -81,6 +144,27 @@ const loading = ref(false)
 const sending = ref(false)
 const codeSeconds = ref(0)
 let codeTimer = null
+
+/** 密码强度：长度 + 字符种类的简单评估，仅作输入引导 */
+const strength = computed(() => {
+  const p = password.value || ''
+  if (!p) return { level: 0, percent: 0, label: '' }
+  let score = 0
+  if (p.length >= 6) score += 1
+  if (p.length >= 10) score += 1
+  const kinds = [/[a-z]/, /[A-Z]/, /\d/, /[^a-zA-Z\d]/].filter((re) => re.test(p)).length
+  if (kinds >= 2) score += 1
+  if (kinds >= 3) score += 1
+  if (p.length < 6) return { level: 1, percent: 20, label: '太短' }
+  if (score <= 2) return { level: 1, percent: 34, label: '较弱' }
+  if (score === 3) return { level: 2, percent: 67, label: '中等' }
+  return { level: 3, percent: 100, label: '强' }
+})
+
+/** 两次密码都已输入且不一致时即时提示，避免提交后才发现 */
+const confirmMismatch = computed(() => (
+  !!confirmPassword.value && !!password.value && confirmPassword.value !== password.value
+))
 
 function goLogin() {
   uni.navigateBack({
@@ -125,6 +209,7 @@ async function sendRegisterCode() {
 }
 
 async function submit() {
+  if (loading.value) return
   if (!EMAIL_RE.test((email.value || '').trim())) {
     uni.showToast({ title: '邮箱格式不对', icon: 'none' })
     return
@@ -158,8 +243,10 @@ async function submit() {
     connectWs(data.accessToken)
     scheduleRegisterPushClient(500)
     try {
-      store.setConversations(await api.conversations() || [])
-    } catch (e) {}
+      await store.fetchConversations(() => api.conversations())
+    } catch (e) {
+      reportCaught('register.afterAuth.conversations', e)
+    }
     uni.vibrateShort && uni.vibrateShort()
     uni.showToast({ title: '账号 ' + data.user.account + ' 已生成', icon: 'none', duration: 2200 })
     setTimeout(() => uni.switchTab({ url: '/pages/chats/chats' }), 400)
@@ -197,11 +284,54 @@ async function submit() {
   transition: border-color 0.2s ease;
 }
 .input.flex { flex: 1; min-width: 0; }
+.input.is-error { border-color: rgba(244, 63, 94, 0.6) !important; }
+.label-opt { color: #6B5C7A; font-size: 22rpx; }
 .eye, .code-btn {
-  flex-shrink: 0; padding: 0 12rpx; color: $pc-purple; font-size: 24rpx;
+  flex-shrink: 0; height: 64rpx; line-height: 64rpx; padding: 0 20rpx;
+  color: $pc-purple; font-size: 24rpx; font-weight: 600;
+  border-radius: $pc-radius-pill; background: rgba(167, 139, 250, 0.1);
+  transition: color 0.2s ease, background 0.2s ease;
 }
-.code-btn.disabled { color: #6B5C7A; }
+.code-btn.disabled { color: #6B5C7A; background: rgba(255, 255, 255, 0.03); pointer-events: none; }
 .ph { color: #6B5C7A; }
+.field-error {
+  display: block;
+  margin-top: 10rpx;
+  padding-left: 8rpx;
+  color: $pc-rose;
+  font-size: 22rpx;
+}
+.strength {
+  display: flex;
+  align-items: center;
+  gap: 14rpx;
+  margin-top: 12rpx;
+  padding: 0 4rpx;
+}
+.strength-bar {
+  flex: 1;
+  height: 6rpx;
+  border-radius: 6rpx;
+  background: rgba(167, 139, 250, 0.12);
+  overflow: hidden;
+}
+.strength-fill {
+  height: 100%;
+  border-radius: 6rpx;
+  transition: width 0.25s ease, background 0.25s ease;
+  &.lv-1 { background: linear-gradient(90deg, #F43F5E, #FB7185); }
+  &.lv-2 { background: linear-gradient(90deg, #E879F9, #A78BFA); }
+  &.lv-3 { background: linear-gradient(90deg, #7C3AED, #A78BFA, #38BDF8); }
+}
+.strength-text {
+  flex-shrink: 0;
+  font-size: 20rpx;
+  min-width: 48rpx;
+  text-align: right;
+  &.lv-1 { color: $pc-rose; }
+  &.lv-2 { color: $pc-magenta; }
+  &.lv-3 { color: $pc-purple; }
+}
 .enter {
   margin-top: 16rpx; height: 96rpx; line-height: 96rpx;
   border-radius: $pc-radius-pill; font-size: 30rpx;

@@ -9,21 +9,54 @@
       </view>
     </view>
 
-    <view class="body">
+    <scroll-view scroll-y class="body" :bounces="true">
       <view class="panel pc-card pc-enter">
-        <text class="tip">邮箱绑定后无法更改</text>
+        <view class="tip-box">
+          <text class="tip-ico">!</text>
+          <text class="tip">邮箱用于验证码登录与找回密码，绑定后无法更改</text>
+        </view>
         <text class="label">邮箱</text>
-        <input class="input" v-model="email" placeholder="请输入邮箱" placeholder-class="ph" />
+        <input
+          class="input pc-input"
+          :class="fieldClass('email')"
+          v-model="email"
+          :focus="focusTarget === 'email'"
+          placeholder="请输入邮箱"
+          placeholder-class="ph"
+          confirm-type="next"
+          @focus="onFocus('email')"
+          @blur="onBlur"
+          @confirm="focusNext('code')"
+        />
         <text class="label">验证码</text>
         <view class="input-row">
-          <input class="input flex" type="number" maxlength="6" v-model="code" placeholder="6位验证码" placeholder-class="ph" />
-          <text class="code-btn" :class="{ disabled: codeSeconds > 0 || sending }" @tap="sendCode">
-            {{ codeSeconds > 0 ? codeSeconds + 's' : (sending ? '发送中' : '获取验证码') }}
+          <input
+            class="input flex pc-input"
+            :class="fieldClass('code')"
+            :focus="focusTarget === 'code'"
+            type="number"
+            maxlength="6"
+            v-model="code"
+            placeholder="6位验证码"
+            placeholder-class="ph"
+            confirm-type="done"
+            @focus="onFocus('code')"
+            @blur="onBlur"
+            @confirm="submit"
+          />
+          <text class="code-btn pc-press" :class="{ disabled: codeSeconds > 0 || sending }" @tap="sendCode">
+            {{ codeSeconds > 0 ? codeSeconds + 's 后重发' : (sending ? '发送中…' : '获取验证码') }}
           </text>
         </view>
-        <button class="pc-btn save" :loading="loading" @tap="submit">绑定</button>
+        <button
+          class="pc-btn save"
+          :class="{ 'is-busy': loading }"
+          :loading="loading"
+          :disabled="loading"
+          @tap="submit"
+        >{{ loading ? '绑定中…' : '绑定' }}</button>
       </view>
-    </view>
+    </scroll-view>
   </view>
   <pc-feedback />
 </template>
@@ -32,8 +65,10 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { api } from '../../utils/request.js'
 import { getStore } from '../../store/index.js'
+import { useFormFocus } from '../../utils/form-focus.js'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+const { focusTarget, onFocus, onBlur, fieldClass, focusNext } = useFormFocus()
 const email = ref('')
 const code = ref('')
 const loading = ref(false)
@@ -53,8 +88,11 @@ onMounted(async () => {
     if (me?.email) {
       uni.showToast({ title: '邮箱绑定后不可更改', icon: 'none' })
       setTimeout(() => uni.navigateBack(), 400)
+      return
     }
   } catch (e) {}
+  // 页面入场动画结束后自动聚焦，减少一次点击
+  setTimeout(() => focusNext('email'), 200)
 })
 
 onUnmounted(() => {
@@ -94,6 +132,7 @@ async function sendCode() {
 }
 
 async function submit() {
+  if (loading.value) return
   if (!EMAIL_RE.test((email.value || '').trim())) {
     uni.showToast({ title: '邮箱格式不对', icon: 'none' })
     return
@@ -107,8 +146,9 @@ async function submit() {
     const user = await api.bindEmail({ email: email.value.trim(), code: code.value })
     getStore().state.user = user
     uni.setStorageSync('pc_user', user)
-    uni.showToast({ title: '绑定成功', icon: 'none' })
-    setTimeout(() => uni.navigateBack(), 400)
+    try { uni.vibrateShort && uni.vibrateShort({ type: 'light' }) } catch (e) {}
+    uni.showToast({ title: '绑定成功', icon: 'success' })
+    setTimeout(() => uni.navigateBack(), 500)
   } catch (e) {
   } finally {
     loading.value = false
@@ -136,8 +176,26 @@ async function submit() {
   padding: 32rpx;
   box-sizing: border-box;
 }
-.tip { display: block; color: $pc-muted; font-size: 22rpx; margin-bottom: 12rpx; }
-.label { display: block; color: $pc-muted; font-size: 24rpx; margin: 18rpx 0 12rpx; }
+.tip-box {
+  display: flex;
+  align-items: flex-start;
+  gap: 12rpx;
+  padding: 16rpx 18rpx;
+  border-radius: $pc-radius-md;
+  background: rgba(167, 139, 250, 0.08);
+  border: 1px solid rgba(167, 139, 250, 0.14);
+}
+.tip-ico {
+  flex-shrink: 0;
+  width: 32rpx; height: 32rpx; line-height: 32rpx;
+  border-radius: 50%;
+  text-align: center;
+  font-size: 20rpx; font-weight: 700;
+  color: $pc-purple;
+  background: rgba(167, 139, 250, 0.18);
+}
+.tip { flex: 1; color: $pc-muted; font-size: 22rpx; line-height: 1.5; }
+.label { display: block; color: $pc-muted; font-size: 24rpx; margin: 22rpx 0 12rpx; }
 .input-row { display: flex; align-items: center; gap: 12rpx; }
 .input {
   height: 92rpx; padding: 0 28rpx; border-radius: $pc-radius-md;
@@ -145,8 +203,13 @@ async function submit() {
   border: 1px solid rgba(167, 139, 250, 0.14);
 }
 .input.flex { flex: 1; min-width: 0; }
-.code-btn { flex-shrink: 0; padding: 0 12rpx; color: $pc-purple; font-size: 24rpx; }
-.code-btn.disabled { color: #6B5C7A; }
+.code-btn {
+  flex-shrink: 0; height: 64rpx; line-height: 64rpx; padding: 0 20rpx;
+  color: $pc-purple; font-size: 24rpx; font-weight: 600;
+  border-radius: $pc-radius-pill; background: rgba(167, 139, 250, 0.1);
+  transition: color 0.2s ease, background 0.2s ease;
+}
+.code-btn.disabled { color: #6B5C7A; background: rgba(255, 255, 255, 0.03); pointer-events: none; }
 .ph { color: rgba(226, 232, 240, 0.35); }
 .save {
   margin-top: 32rpx; height: 88rpx; line-height: 88rpx;

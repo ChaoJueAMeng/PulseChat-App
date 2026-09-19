@@ -19,24 +19,35 @@
         <view class="field">
           <text class="label">账号</text>
           <input
-            class="input"
+            class="input pc-input"
+            :class="fieldClass('account')"
             v-model="account"
             placeholder="请输入手机号或邮箱"
             placeholder-class="ph"
+            confirm-type="next"
+            @focus="onFocus('account')"
+            @blur="onBlur"
+            @confirm="focusNext('password')"
           />
         </view>
         <view class="field">
           <text class="label">密码</text>
           <view class="input-row">
             <input
-              class="input flex"
+              class="input flex pc-input"
+              :class="fieldClass('password')"
               :password="!showPassword"
+              :focus="focusTarget === 'password'"
               maxlength="32"
               v-model="password"
               placeholder="6-32位密码"
               placeholder-class="ph"
+              confirm-type="done"
+              @focus="onFocus('password')"
+              @blur="onBlur"
+              @confirm="submit"
             />
-            <text class="eye" @tap="showPassword = !showPassword">{{ showPassword ? '隐藏' : '显示' }}</text>
+            <text class="eye pc-press" @tap="showPassword = !showPassword">{{ showPassword ? '隐藏' : '显示' }}</text>
           </view>
         </view>
       </template>
@@ -44,20 +55,49 @@
       <template v-else>
         <view class="field">
           <text class="label">邮箱</text>
-          <input class="input" v-model="email" placeholder="请输入邮箱" placeholder-class="ph" />
+          <input
+            class="input pc-input"
+            :class="fieldClass('email')"
+            v-model="email"
+            placeholder="请输入邮箱"
+            placeholder-class="ph"
+            confirm-type="next"
+            @focus="onFocus('email')"
+            @blur="onBlur"
+            @confirm="focusNext('code')"
+          />
         </view>
         <view class="field">
           <text class="label">验证码</text>
           <view class="input-row">
-            <input class="input flex" type="number" maxlength="6" v-model="code" placeholder="6位验证码" placeholder-class="ph" />
-            <text class="code-btn" :class="{ disabled: codeSeconds > 0 || sending }" @tap="sendLoginCode">
-              {{ codeSeconds > 0 ? codeSeconds + 's' : (sending ? '发送中' : '获取验证码') }}
+            <input
+              class="input flex pc-input"
+              :class="fieldClass('code')"
+              :focus="focusTarget === 'code'"
+              type="number"
+              maxlength="6"
+              v-model="code"
+              placeholder="6位验证码"
+              placeholder-class="ph"
+              confirm-type="done"
+              @focus="onFocus('code')"
+              @blur="onBlur"
+              @confirm="submit"
+            />
+            <text class="code-btn pc-press" :class="{ disabled: codeSeconds > 0 || sending }" @tap="sendLoginCode">
+              {{ codeSeconds > 0 ? codeSeconds + 's 后重发' : (sending ? '发送中…' : '获取验证码') }}
             </text>
           </view>
         </view>
       </template>
 
-      <button class="pc-btn enter" :loading="loading" @tap="submit">登录</button>
+      <button
+        class="pc-btn enter"
+        :class="{ 'is-busy': loading }"
+        :loading="loading"
+        :disabled="loading"
+        @tap="submit"
+      >{{ loading ? '登录中…' : '登录' }}</button>
       <view class="switch-row">
         <text class="switch-text">还没有账号？</text>
         <text class="switch-link" @tap="goRegister">去注册</text>
@@ -73,10 +113,13 @@ import { api } from '../../utils/request.js'
 import { getStore } from '../../store/index.js'
 import { connectWs } from '../../utils/ws.js'
 import { scheduleRegisterPushClient } from '../../utils/notify.js'
+import { useFormFocus } from '../../utils/form-focus.js'
+import { reportCaught } from '../../utils/error-report.js'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const PHONE_RE = /^1\d{10}$/
 
+const { focusTarget, onFocus, onBlur, fieldClass, focusNext } = useFormFocus()
 const mode = ref('password')
 const account = ref('')
 const email = ref('')
@@ -138,8 +181,10 @@ async function afterAuth(data, toast) {
   connectWs(data.accessToken)
   scheduleRegisterPushClient(500)
   try {
-    store.setConversations(await api.conversations() || [])
-  } catch (e) {}
+    await store.fetchConversations(() => api.conversations())
+  } catch (e) {
+    reportCaught('login.afterAuth.conversations', e)
+  }
   uni.vibrateShort && uni.vibrateShort()
   uni.showToast({ title: toast, icon: 'none' })
   setTimeout(() => uni.switchTab({ url: '/pages/chats/chats' }), 400)
@@ -163,6 +208,7 @@ async function sendLoginCode() {
 }
 
 async function submit() {
+  if (loading.value) return
   if (mode.value === 'code') {
     if (!EMAIL_RE.test((email.value || '').trim())) {
       uni.showToast({ title: '邮箱格式不对', icon: 'none' })
@@ -268,9 +314,12 @@ async function submit() {
 }
 .input.flex { flex: 1; min-width: 0; }
 .eye, .code-btn {
-  flex-shrink: 0; padding: 0 12rpx; color: $pc-purple; font-size: 24rpx;
+  flex-shrink: 0; height: 64rpx; line-height: 64rpx; padding: 0 20rpx;
+  color: $pc-purple; font-size: 24rpx; font-weight: 600;
+  border-radius: $pc-radius-pill; background: rgba(167, 139, 250, 0.1);
+  transition: color 0.2s ease, background 0.2s ease;
 }
-.code-btn.disabled { color: #6B5C7A; }
+.code-btn.disabled { color: #6B5C7A; background: rgba(255, 255, 255, 0.03); pointer-events: none; }
 .ph { color: #6B5C7A; }
 .enter {
   margin-top: 16rpx; height: 96rpx; line-height: 96rpx;
