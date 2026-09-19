@@ -240,6 +240,219 @@ page {
   animation: pc-fade-up 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
+/* —— 表单：输入框聚焦高亮（页面各自 .input 负责基础尺寸，此处只叠加聚焦态） —— */
+.pc-input.is-focus {
+  border-color: rgba(167, 139, 250, 0.72) !important;
+  box-shadow:
+    0 0 0 4rpx rgba(167, 139, 250, 0.14),
+    0 0 24rpx rgba(167, 139, 250, 0.14);
+  background: rgba(167, 139, 250, 0.06) !important;
+}
+
+.pc-input {
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+}
+
+/* 字数统计 / 表单辅助文案 */
+.pc-counter {
+  display: block;
+  text-align: right;
+  font-size: 20rpx;
+  color: #6B5C7A;
+  letter-spacing: 0.5rpx;
+  &.is-near { color: $pc-rose; }
+}
+
+/* —— 空态：图标 + 标题 + 说明 + 可选动作 —— */
+.pc-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 120rpx 40rpx 100rpx;
+  animation: pc-fade-up 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.pc-empty--compact {
+  padding: 56rpx 24rpx 48rpx;
+}
+.pc-empty__icon {
+  width: 128rpx;
+  height: 128rpx;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 26rpx;
+  font-size: 56rpx;
+  line-height: 1;
+  color: $pc-purple;
+  background:
+    radial-gradient(circle at 30% 30%, rgba(167, 139, 250, 0.28), transparent 60%),
+    radial-gradient(circle at 70% 70%, rgba(244, 63, 94, 0.18), transparent 60%),
+    rgba(28, 16, 48, 0.9);
+  border: 1px solid rgba(167, 139, 250, 0.22);
+  box-shadow: 0 0 32rpx rgba(124, 58, 237, 0.18);
+}
+.pc-empty--compact .pc-empty__icon {
+  width: 96rpx;
+  height: 96rpx;
+  font-size: 44rpx;
+  margin-bottom: 18rpx;
+}
+.pc-empty__title {
+  display: block;
+  font-size: 30rpx;
+  font-weight: 600;
+  color: $pc-text;
+}
+.pc-empty__sub {
+  display: block;
+  margin-top: 12rpx;
+  font-size: 24rpx;
+  line-height: 1.55;
+  color: $pc-muted;
+}
+.pc-empty__action {
+  margin-top: 30rpx;
+  height: 72rpx;
+  line-height: 72rpx;
+  padding: 0 40rpx;
+  border-radius: $pc-radius-pill;
+  font-size: 26rpx;
+  font-weight: 600;
+  color: #fff;
+  background: linear-gradient(120deg, #7C3AED 0%, #A78BFA 42%, #F43F5E 100%);
+  box-shadow: 0 8rpx 24rpx rgba(124, 58, 237, 0.28);
+}
+
+/* —— 骨架屏：列表行占位 —— */
+.pc-skeleton {
+  border-radius: $pc-radius-lg;
+  background: linear-gradient(90deg, rgba(167, 139, 250, 0.06), rgba(244, 63, 94, 0.1), rgba(167, 139, 250, 0.06));
+  background-size: 200% 100%;
+  animation: pc-shine 1.2s linear infinite;
+}
+.pc-skeleton--row {
+  height: 128rpx;
+  margin-bottom: 14rpx;
+}
+
+/* —— 列表右侧箭头（纯 CSS，避免字形不一致） —— */
+.pc-chevron {
+  width: 16rpx;
+  height: 16rpx;
+  flex-shrink: 0;
+  border-top: 3rpx solid rgba(155, 138, 175, 0.7);
+  border-right: 3rpx solid rgba(155, 138, 175, 0.7);
+  transform: rotate(45deg);
+  margin-right: 6rpx;
+}
+
+/* —— 计数胶囊（未读 / 待处理数） —— */
+.pc-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34rpx;
+  height: 34rpx;
+  padding: 0 10rpx;
+  border-radius: $pc-radius-pill;
+  background: linear-gradient(135deg, $pc-rose, $pc-red);
+  color: #fff;
+  font-size: 20rpx;
+  font-weight: 700;
+  line-height: 1;
+  box-shadow: 0 4rpx 12rpx rgba(244, 63, 94, 0.32);
+}
+.pc-count--soft {
+  background: rgba(167, 139, 250, 0.16);
+  color: $pc-purple;
+  box-shadow: none;
+}
+
+/* —— 勾选框（群成员选择等） —— */
+.pc-check {
+  width: 40rpx;
+  height: 40rpx;
+  flex-shrink: 0;
+  border-radius: 12rpx;
+  border: 2rpx solid rgba(167, 139, 250, 0.55);
+  background: rgba(255, 255, 255, 0.03);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.18s ease, border-color 0.18s ease, transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1);
+  &::after {
+    content: '';
+    width: 10rpx;
+    height: 18rpx;
+    border-right: 3rpx solid #fff;
+    border-bottom: 3rpx solid #fff;
+    transform: rotate(45deg) translate(-1rpx, -2rpx) scale(0);
+    transition: transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  &.on {
+    background: linear-gradient(135deg, $pc-purple-deep, $pc-red);
+    border-color: transparent;
+    transform: scale(1.04);
+    &::after { transform: rotate(45deg) translate(-1rpx, -2rpx) scale(1); }
+  }
+}
+
+/* —— 列表行左侧图标小方块 —— */
+.pc-item-ico {
+  width: 60rpx;
+  height: 60rpx;
+  flex-shrink: 0;
+  border-radius: 18rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 28rpx;
+  line-height: 1;
+  color: $pc-purple;
+  background: rgba(167, 139, 250, 0.12);
+  border: 1px solid rgba(167, 139, 250, 0.16);
+  &.danger {
+    color: $pc-rose;
+    background: rgba(244, 63, 94, 0.12);
+    border-color: rgba(244, 63, 94, 0.18);
+  }
+}
+
+/* —— 小型胶囊操作按钮（同意 / 拒绝 / 添加 等） —— */
+.pc-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 60rpx;
+  padding: 0 26rpx;
+  border-radius: $pc-radius-pill;
+  font-size: 24rpx;
+  font-weight: 600;
+  line-height: 1;
+  color: #fff;
+  background: linear-gradient(120deg, #7C3AED 0%, #A78BFA 55%, #E879F9 100%);
+  box-shadow: 0 6rpx 18rpx rgba(124, 58, 237, 0.28);
+  transition: opacity 0.15s ease;
+  &.ghost {
+    color: $pc-muted;
+    background: rgba(167, 139, 250, 0.1);
+    border: 1px solid rgba(167, 139, 250, 0.18);
+    box-shadow: none;
+  }
+  &.danger {
+    color: $pc-rose;
+    background: rgba(244, 63, 94, 0.12);
+    border: 1px solid rgba(244, 63, 94, 0.2);
+    box-shadow: none;
+  }
+  &.disabled {
+    opacity: 0.5;
+    pointer-events: none;
+  }
+}
+
 @keyframes pc-refresher-spin {
   to { transform: rotate(360deg); }
 }

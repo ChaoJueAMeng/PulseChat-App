@@ -180,10 +180,31 @@ view, text {
   letter-spacing: 1px;
   background: linear-gradient(120deg, #7C3AED 0%, #A78BFA 42%, #F43F5E 100%);
   box-shadow: 0 8rpx 24rpx rgba(124, 58, 237, 0.28);
+  transition: opacity 0.15s ease, transform 0.15s ease, box-shadow 0.2s ease;
+}
+
+/* 去掉平台默认的伪元素描边，避免渐变按钮外圈出现灰边 */
+.pc-btn::after {
+  border: none;
 }
 
 .pc-btn:active {
   opacity: 0.92;
+  transform: scale(0.985);
+}
+
+/* 统一禁用 / 提交中态：覆盖 uni 默认的灰底黑字 */
+.pc-btn[disabled],
+.pc-btn.is-busy {
+  color: rgba(255, 255, 255, 0.72) !important;
+  background: linear-gradient(120deg, rgba(124, 58, 237, 0.55) 0%, rgba(167, 139, 250, 0.5) 42%, rgba(244, 63, 94, 0.5) 100%) !important;
+  box-shadow: none !important;
+  opacity: 1 !important;
+  transform: none !important;
+}
+
+.pc-btn[loading]::before {
+  color: #fff;
 }
 
 /* 列表卡片用实色底，避免每行 backdrop-filter 造成滚动掉帧 */
