@@ -46,7 +46,7 @@
         <view v-if="!hasMoreHistory && messages.length" class="history-end">没有更早的消息了</view>
         <view
           v-for="(m, index) in messages"
-          :key="m.clientMsgId || m.id"
+          :key="String(m.id || m.clientMsgId)"
           class="msg-block"
         >
           <view v-if="shouldShowTime(m, index)" class="msg-time">
@@ -418,9 +418,9 @@ import { getDisplayUrl, ensureCached, prefetchAll, forgetCached, cacheLocalAs, i
 import {
   peekVideoCached,
   abortVideoDownload,
-  prefetchVideos,
   cacheVideoLocalAs
 } from '../../utils/video-cache.js'
+import { reportCaught } from '../../utils/error-report.js'
 import { getStore } from '../../store/index.js'
 import { subscribeConversation, onWs, sendStomp } from '../../utils/ws.js'
 import { getBackground, syncBackgroundFromDetail } from '../../utils/chat-settings.js'
@@ -618,6 +618,12 @@ let aiFlushTimer = null
 let aiScrollPending = false
 let typingActive = false
 let bubbleLongPressTimer = null
+/** onLoad 完成后才允许 onShow / 重连补拉，避免首屏打两次 */
+let pageSessionReady = false
+/** 最新一页历史 / 回前台补拉共用，避免并发整页对打 */
+let latestSyncInflight = null
+/** 清空记录或换会话时作废进行中的补拉 */
+let historyEpoch = 0
 
 const isPrivateHuman = computed(() => convType.value === 1 && peer.value && !peer.value.bot)
 const isAiPrivate = computed(() => convType.value === 1 && peer.value && !!peer.value.bot)
@@ -1615,6 +1621,8 @@ onLoad(async (q) => {
 
   conversationId.value = Number(q.id)
   getStore().setActiveChatId(conversationId.value)
+  historyEpoch += 1
+  pageSessionReady = true
   title.value = decodeURIComponent(q.title || '聊天')
   // 尽早预挂载「更多」层，避免首滑中途创建 DOM 造成跟手卡顿
   ensureMoreMounted()
@@ -1674,6 +1682,12 @@ onShow(async () => {
   // 从「清空聊天记录」返回时，同步重拉空历史
   if (consumeClearedFlag(conversationId.value)) {
     await applyLocalHistoryCleared()
+  } else if (pageSessionReady) {
+    try {
+      await syncLatestMessages()
+    } catch (e) {
+      reportCaught('chat.onShow.syncLatest', e)
+    }
   }
   if (messages.value.length) {
     markConversationRead(messages.value[messages.value.length - 1].id, true)
@@ -1710,6 +1724,9 @@ onUnload(() => {
     store.setActiveChatId(null)
   }
   previewEarlierLock = false
+  pageSessionReady = false
+  historyEpoch += 1
+  latestSyncInflight = null
   if (feedbackState.videoPlayer.show) closeVideoPlayer()
   if (feedbackState.preview.show) closePreview()
   else setPreviewReachEarlierHandler(null)
@@ -1754,6 +1771,18 @@ onMounted(() => {
     // 自己发出的事件已乐观更新，忽略回声避免抖动
     if (payload.userId != null && Number(payload.userId) === Number(myId)) return
     applyRemoteReaction(payload)
+  }))
+  offs.push(onWs('connected', () => {
+    if (!conversationId.value || !pageSessionReady) return
+    syncLatestMessages()
+      .then(() => {
+        if (messages.value.length) {
+          markConversationRead(messages.value[messages.value.length - 1].id)
+        }
+      })
+      .catch((e) => {
+        reportCaught('chat.syncOnReconnect', e)
+      })
   }))
   offs.push(onWs('notify', (body) => {
     if (!body || typeof body !== 'object' || body.type !== 'conversation_cleared') return
@@ -1961,32 +1990,56 @@ function scrollToBottomLite() {
 }
 
 async function loadHistory(beforeId) {
+  if (!beforeId) {
+    if (latestSyncInflight) return latestSyncInflight
+    const epoch = historyEpoch
+    const task = loadLatestHistoryPage(epoch).finally(() => {
+      if (latestSyncInflight === task) latestSyncInflight = null
+    })
+    latestSyncInflight = task
+    return task
+  }
   // 断连期间避免刷网络异常 Toast：走 silent 模式（仍让函数失败以保持原调用行为）
   const list = await api.messages(conversationId.value, beforeId, !connected.value)
   const rows = (list || []).map((msg) => normalizeMsg(msg))
-  if (!beforeId) {
-    messages.value = rows
-    hasMoreHistory.value = rows.length >= HISTORY_PAGE_SIZE
-    setCachedMessages(conversationId.value, rows)
-    // 首次加载：无动画 + 多次 settle，展示最新消息
-    scrollToBottom(false, true)
-    // 首屏内容较矮时静默补拉，避免一上滑就顶到头
-    if (hasMoreHistory.value) {
-      setTimeout(() => {
-        if (connected.value && currentScrollTop <= LOAD_MORE_THRESHOLD) loadMore()
-      }, 320)
-    }
-  } else {
-    // 上拉加载更早消息：保持当前位置，不强制贴底
-    messages.value = [...rows, ...messages.value]
-    if (!rows.length || rows.length < HISTORY_PAGE_SIZE) {
-      hasMoreHistory.value = false
-    }
-    // 缓存仍只保留最近一页，便于下次进房秒开
-    scheduleCacheMessages(conversationId.value, messages.value)
+  // 上拉加载更早消息：保持当前位置，不强制贴底
+  messages.value = [...rows, ...messages.value]
+  if (!rows.length || rows.length < HISTORY_PAGE_SIZE) {
+    hasMoreHistory.value = false
   }
+  // 缓存仍只保留最近一页，便于下次进房秒开
+  scheduleCacheMessages(conversationId.value, messages.value)
   prefetchMsgMedia(rows)
   return rows
+}
+
+async function loadLatestHistoryPage(epoch) {
+  const list = await api.messages(conversationId.value, undefined, !connected.value)
+  if (epoch !== historyEpoch) return []
+  const rows = (list || []).map((msg) => normalizeMsg(msg))
+  const wasEmpty = messages.value.length === 0
+  for (const msg of rows) {
+    if (epoch !== historyEpoch) return []
+    upsertMsg(msg)
+  }
+  hasMoreHistory.value = rows.length >= HISTORY_PAGE_SIZE
+  setCachedMessages(conversationId.value, messages.value)
+  if (wasEmpty) {
+    scrollToBottom(false, true)
+  } else if (nearBottom) {
+    scrollToBottomLite()
+  }
+  if (hasMoreHistory.value) {
+    setTimeout(() => {
+      if (connected.value && currentScrollTop <= LOAD_MORE_THRESHOLD) loadMore()
+    }, 320)
+  }
+  return rows
+}
+
+function syncLatestMessages() {
+  if (!conversationId.value) return Promise.resolve([])
+  return loadHistory()
 }
 
 function consumeClearedFlag(convId) {
@@ -2004,6 +2057,8 @@ function consumeClearedFlag(convId) {
 
 /** 云端已清空后，同步本页消息列表与 AI 流式中间态 */
 async function applyLocalHistoryCleared() {
+  historyEpoch += 1
+  latestSyncInflight = null
   messages.value = []
   hasMoreHistory.value = false
   typingText.value = ''
@@ -2253,6 +2308,38 @@ function formatMsgTime(t) {
   return d.getFullYear() + '年' + (d.getMonth() + 1) + '月' + d.getDate() + '日 ' + hm
 }
 
+function findExistingMsgIndex(msg) {
+  const id = msg?.id != null ? Number(msg.id) : 0
+  if (id > 0) {
+    const byId = messages.value.findIndex(m => Number(m.id) === id)
+    if (byId >= 0) return byId
+  }
+  if (msg?.clientMsgId) {
+    const byClient = messages.value.findIndex(m => m.clientMsgId && m.clientMsgId === msg.clientMsgId)
+    if (byClient >= 0) return byClient
+  }
+  return -1
+}
+
+function insertMsgInOrder(msg) {
+  const id = Number(msg.id) || 0
+  const list = messages.value
+  if (id <= 0) {
+    list.push(msg)
+    return
+  }
+  for (let i = list.length - 1; i >= 0; i--) {
+    const nid = Number(list[i].id) || 0
+    if (nid > 0 && nid < id) {
+      list.splice(i + 1, 0, msg)
+      return
+    }
+  }
+  const firstNumbered = list.findIndex(m => Number(m.id) > 0)
+  if (firstNumbered < 0) list.push(msg)
+  else list.splice(firstNumbered, 0, msg)
+}
+
 function upsertMsg(msg) {
   if (!msg || typeof msg !== 'object') return
   const myId = getStore().state.user?.id
@@ -2266,14 +2353,13 @@ function upsertMsg(msg) {
       return
     }
   }
-  const existIdx = messages.value.findIndex(m => m.id === msg.id)
+  const existIdx = findExistingMsgIndex(msg)
   if (existIdx >= 0) {
-    // 原地更新，避免整表 map 重建
     messages.value[existIdx] = normalizeMsg({ ...messages.value[existIdx], ...msg })
     scheduleCacheMessages(conversationId.value, messages.value)
     return
   }
-  messages.value.push(msg)
+  insertMsgInOrder(msg)
   prefetchMsgMedia(msg)
   scheduleCacheMessages(conversationId.value, messages.value)
 }
@@ -2346,15 +2432,11 @@ function restoreAiStream(detail) {
 }
 
 async function syncLatestAfterAiDone() {
-  if (!conversationId.value) return
   try {
-    const list = await api.messages(conversationId.value, undefined, !connected.value)
-    const rows = list || []
-    for (const msg of rows) {
-      upsertMsg(msg)
-    }
-    if (nearBottom) scrollToBottomLite()
-  } catch (e) {}
+    await syncLatestMessages()
+  } catch (e) {
+    reportCaught('chat.syncLatestAfterAiDone', e)
+  }
 }
 
 function ensureAiStreamingBubble(clientMsgId, content) {
@@ -3123,17 +3205,9 @@ function mediaPrefetchTargets(msg) {
   return []
 }
 
-function videoPrefetchTargets(msg) {
-  if (!msg || isRecalledMsg(msg) || msg.msgType !== MSG_VIDEO || !msg.content) return []
-  return [msg.content]
-}
-
 function prefetchMsgMedia(list) {
   const msgs = Array.isArray(list) ? list : (list ? [list] : [])
   prefetchAll(msgs.flatMap((m) => mediaPrefetchTargets(m)))
-  // 播放中不要再后台拉视频，避免和播放器抢带宽导致卡顿
-  if (feedbackState.videoPlayer.show) return
-  prefetchVideos(msgs.flatMap((m) => videoPrefetchTargets(m)))
 }
 
 /** 可进入聊天图片/表情包相册的消息 */
@@ -3778,11 +3852,11 @@ async function openForward(m) {
   forwardSource.value = m
   showForward.value = true
   try {
-    const list = await api.conversations()
+    const list = await store.fetchConversations(() => api.conversations())
     // 包含当前会话，允许转发回本聊天
-    forwardList.value = list || []
-    store.setConversations(list || [])
+    forwardList.value = list || store.state.conversations || []
   } catch (e) {
+    reportCaught('chat.openForward', e)
     forwardList.value = store.state.conversations || []
   }
 }

@@ -1126,6 +1126,8 @@ function onRowTouchStart(item, e) {
     rowPressState.active = false
     const target = rowPressState.item
     rowPressState.item = null
+    // 长按达成给一次轻震动，让用户明确知道菜单是「按出来的」而非误触
+    try { uni.vibrateShort && uni.vibrateShort({ type: 'light' }) } catch (e) {}
     onLong(target)
   }, LONG_PRESS_DELAY_MS)
 }
