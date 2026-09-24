@@ -22,16 +22,13 @@
       @touchcancel.stop="$emit('swipeCancel', $event)"
     >
       <view class="hero pc-card pc-enter pc-press" @tap="goEdit">
-        <view class="hero-avatar" @tap.stop="changeAvatar">
+        <view class="hero-avatar" @tap.stop="onAvatarTap">
           <pc-avatar
             :url="user?.avatar"
             :name="user?.nickname || 'P'"
             :size="128"
             clickable
           />
-          <view class="hero-avatar__edit">
-            <text>换</text>
-          </view>
         </view>
         <view class="info">
           <text class="name">{{ user?.nickname || '用户' }}</text>
@@ -110,7 +107,12 @@
       <view class="group pc-enter" style="animation-delay: 0.12s">
         <view class="menu pc-card">
           <view class="item danger pc-press" @tap="logout">
-            <view class="pc-item-ico danger">⏻</view>
+            <view class="pc-item-ico danger">
+              <view class="ico-power">
+                <view class="ico-power__stem" />
+                <view class="ico-power__ring" />
+              </view>
+            </view>
             <text class="item-label">退出登录</text>
           </view>
         </view>
@@ -125,7 +127,9 @@
 import { ref, computed, watch } from 'vue'
 import { api } from '../../utils/request.js'
 import { getStore } from '../../store/index.js'
-import { pickAndUploadAvatar } from '../../utils/avatar.js'
+import { pickAndUploadAvatar, DEFAULT_AVATAR } from '../../utils/avatar.js'
+import { fullUrl } from '../../utils/url.js'
+import { getDisplayUrl } from '../../utils/image-cache.js'
 import {
   getNotifyPrefs,
   setNotifyPrefs,
@@ -199,6 +203,26 @@ function goPassword() {
   uni.navigateTo({ url: '/pages/account/change-password' })
 }
 function goStickers() { uni.navigateTo({ url: '/pages/sticker-manage/sticker-manage' }) }
+function onAvatarTap() {
+  uni.showActionSheet({
+    itemList: ['查看头像', '更换头像'],
+    success: (res) => {
+      if (res.tapIndex === 0) previewAvatar()
+      else if (res.tapIndex === 1) changeAvatar()
+    }
+  })
+}
+function previewAvatar() {
+  const path = user.value?.avatar
+  const src = path
+    ? (fullUrl(path) || getDisplayUrl(path))
+    : DEFAULT_AVATAR
+  if (!src) {
+    uni.showToast({ title: '暂无头像', icon: 'none' })
+    return
+  }
+  uni.previewImage({ urls: [src], current: src })
+}
 async function changeAvatar() {
   try {
     user.value = await pickAndUploadAvatar()
@@ -293,21 +317,6 @@ watch(() => props.active, (v) => {
   position: relative;
   flex-shrink: 0;
 }
-.hero-avatar__edit {
-  position: absolute;
-  right: -6rpx;
-  bottom: -6rpx;
-  width: 40rpx;
-  height: 40rpx;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: linear-gradient(135deg, $pc-purple-deep, $pc-red);
-  border: 3rpx solid rgba(20, 10, 34, 0.95);
-  box-shadow: 0 4rpx 12rpx rgba(124, 58, 237, 0.4);
-  text { color: #fff; font-size: 18rpx; font-weight: 700; line-height: 1; }
-}
 .info { flex: 1; min-width: 0; }
 .name {
   display: block; font-size: 36rpx; font-weight: 800; color: $pc-text;
@@ -383,6 +392,33 @@ watch(() => props.active, (v) => {
   gap: 6rpx;
 }
 .switch-desc { color: $pc-muted; font-size: 22rpx; }
+.ico-power {
+  position: relative;
+  width: 24rpx;
+  height: 24rpx;
+}
+.ico-power__stem {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  z-index: 1;
+  width: 3rpx;
+  height: 11rpx;
+  margin-left: -1.5rpx;
+  border-radius: 2rpx;
+  background: $pc-rose;
+}
+.ico-power__ring {
+  position: absolute;
+  left: 0;
+  top: 2rpx;
+  width: 24rpx;
+  height: 22rpx;
+  box-sizing: border-box;
+  border: 3rpx solid $pc-rose;
+  border-top-color: transparent;
+  border-radius: 50%;
+}
 .version {
   display: block;
   text-align: center;
